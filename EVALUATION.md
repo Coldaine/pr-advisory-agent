@@ -191,6 +191,45 @@ The self-hosting concept is architecturally valid (`letta_base_url` is real), bu
 
 ---
 
+## Code Quality & Implementation Defects Analysis
+
+Beyond high-level architectural gaps, the actual code scripts and prompts provided in the plans contain several critical logic errors and code quality issues:
+
+### 1. `check_deps.py` Logic & Performance Defects (Plan 2)
+* **Naive String Matching for SemVer**:
+  ```python
+  if latest_ver and latest_ver != current_ver:
+  ```
+  In `package.json`, `current_ver` contains semantic ranges (e.g., `"^4.18.2"` or `"~1.0.0"`). Doing a direct string inequality check against the latest version (`"4.18.2" != "^4.18.2"`) will produce constant false positives. It flags packages as outdated even when they are fully up-to-date.
+* **Lack of Lockfile Resolution**:
+  Scanning `package.json` only gives the defined *range*, not the actual *installed* version ($X$) required by Requirement 4 ("you are using version X"). The script must parse `package-lock.json` or `yarn.lock` to report the true installed version.
+* **Sequential Requests Bottleneck**:
+  The script performs a synchronous `requests.get` call inside a `for` loop for every single dependency. A standard repository with 100+ dependencies will block the script for minutes, potentially hitting registry rate limits and timing out the entire run.
+
+### 2. `webhook-handler.py` Blocking & Timeout Defect (Plan 2 / Plan 3)
+* **Webhook Timeout**:
+  ```python
+  r = requests.post(f"{LETTA_API_URL}/{AGENT_ID}/messages", json=agent_payload, headers=headers)
+  return jsonify({"status": "triggered"})
+  ```
+  This is a blocking HTTP request. Because the Letta Agent's review turn takes 1–3 minutes (cloning, dependency checking, web searches, and LLM generation), this webhook call will hang. GitHub has a strict **10-second webhook timeout**. This blocking call will cause GitHub to log all webhook deliveries as failed and trigger repeated retries, leading to execution loops.
+  * **Fix**: The handler must trigger the agent *asynchronously* (e.g., using a background thread, queue, or an async run endpoint) and return a `202 Accepted` response to GitHub immediately.
+
+### 3. `check-deps.sh` Silent Failure Defect (Plan 1)
+* **Swallowed Diagnostics**:
+  ```bash
+  cargo outdated --format json 2>/dev/null || true
+  ```
+  By redirecting `stderr` to `/dev/null` and appending `|| true`, the script swallows all errors. If a tool like `cargo-outdated` is missing or fails, the script returns an empty string instead of alerting the agent that the scan environment is incomplete. The agent will falsely assume there are zero dependencies or updates.
+
+### 4. Prompt Engineering & Suggestion Quota Defect (Plan 1 & Plan 2)
+* **Forced Suggestion Quota**:
+  The prompts state: *"Identify exactly 5 places where an alternative architectural approach could be used..."*
+  Forcing a strict count of exactly 5 alternatives means that for minor PRs (e.g., config changes or simple typo fixes) the agent is forced to hallucinate or pad the review with low-quality, generic "filler" recommendations. This degrades review trust and introduces developer noise.
+  * **Fix**: The prompt should instruct the agent to find *up to* 5 viable alternatives, allowing it to skip the section or offer fewer if the PR is small or the code is already well-architected.
+
+---
+
 ## The GitHub Runner Anti-Pattern in Self-Hosting (Plan 3)
 
 ### The Anti-Pattern
