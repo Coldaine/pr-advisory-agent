@@ -1,0 +1,211 @@
+I am thrilled that we've landed on the perfect architecture for your needs. Here is the complete, consolidated blueprint packaged as a single Markdown document. You can copy the content below and save it as `PR_Advisory_Agent_Blueprint.md`.
+
+***
+
+```markdown
+# PR Advisory Agent Blueprint: Letta Code + Kubernetes
+
+## Executive Summary
+This document outlines the architecture and implementation plan for an AI-driven PR Advisory Agent. The agent comments on every Pull Request, analyzing dependency versions and suggesting architectural alternatives. 
+
+The design leverages **Letta Code** for its built-in agent harness and GitHub Action integration, ensuring strict advisory-only boundaries. State and memory are persisted using a **Self-Hosted Letta Server on Kubernetes**, utilizing Letta's **MemFS** (git-backed filesystem) for cross-PR learning, and **Sleep-Time Dream Agents** for automated self-evaluation and memory consolidation.
+
+---
+
+## 1. Requirements Mapping
+
+| Requirement | Implementation in this Design |
+| :--- | :--- |
+| **PR Coverage** | GitHub Action triggers on every `pull_request: [opened]` event. |
+| **Advisory Only** | Letta Code GitHub Action natively blocks PR approvals and workflow file modifications. Agent lacks write access to source code. |
+| **Dependency Analysis** | Custom `check_deps.py` script executed via Letta's shell tool. |
+| **Version Checking** | Custom `augmented_web_search` (Exa + Tavily + Firecrawl) and Context7 MCP for library docs. |
+| **Architectural Alternatives** | LLM reasoning guided by the `architecture-advisory` skill to generate 5 alternatives with pros/cons. |
+| **Agent-Driven** | Letta Code provides a full agent harness with LLM reasoning, not a rigid script. |
+| **Fully-Featured Harness** | Letta Code natively provides file read, shell execution, and PR commenting tools. |
+| **Persistent Memory** | MemFS (git-backed filesystem) stored on a Kubernetes Persistent Volume (PVC). |
+| **Periodic Self-Evaluation** | Letta's built-in Sleep-Time Dream Agents (compaction-triggered) reflect on recent PRs and consolidate memory. |
+| **Rapid Implementation** | 1-day, 4-stage deployment plan leveraging existing K8s infrastructure and GitHub Actions. |
+
+---
+
+## 2. Architecture Overview
+
+This design uses a hybrid approach: the simplicity of the GitHub Action for PR integration, combined with the control and persistence of your self-hosted Kubernetes infrastructure.
+
+```mermaid
+flowchart TD
+    A[GitHub PR Opened] --> B[Letta Code GitHub Action]
+    B --> C[Connects to Self-Hosted Letta Server<br/>via LETTA_BASE_URL]
+    
+    C --> D[Letta Server on Kubernetes]
+    D --> E[Persistent Volume<br/>MemFS Git Repository]
+    
+    D --> F[Agent Instance]
+    F --> G[Tools: check_deps, OSV, Web Search]
+    F --> H[Skills: audit, advisory]
+    F --> I[Sleep-Time Dream Agent<br/>Background consolidation]
+    
+    F --> J[Posts Advisory Comment<br/>via GitHub Token]
+    J --> K[Updates MemFS on PV]
+```
+
+### Core Components
+1. **Letta Code GitHub Action:** The entry point. It intercepts PR events, passes context to the agent, and enforces security boundaries (advisory-only).
+2. **Letta Server (K8s Deployment):** The agent runtime. Hosted on your Kubernetes cluster to maintain persistent state.
+3. **MemFS (Memory File System):** Letta's git-backed memory substrate stored on a K8s Persistent Volume (PVC). Replaces legacy memory blocks.
+4. **Sleep-Time Dream Agent:** A built-in background process that wakes up on context compaction triggers to evaluate recent PRs and consolidate memory patterns.
+5. **Skills & Tools:** The instructions (`architecture-advisory`) and capabilities (`check_deps.py`, web search) given to the agent.
+
+---
+
+## 3. Implementation Plan (1-Day, 4 Stages)
+
+### Stage 1: Kubernetes Deployment & Storage (Hours 1-4)
+**Goal:** Deploy the Letta Server to your cluster with persistent storage.
+
+1. **Create Kubernetes Manifests:**
+   * **Deployment:** Run the `letta/letta-server` Docker image.
+   * **Service:** Expose port 8283 internally.
+   * **PersistentVolumeClaim (PVC):** Provision storage for the MemFS git repository. This ensures memory survives pod restarts.
+2. **Configure Ingress:** Set up an Ingress route with TLS to expose the Letta server securely (e.g., `letta.yourdomain.com`).
+3. **Initialize MemFS:** Exec into the pod and run `/memfs enable` to initialize the git-backed memory on the persistent volume.
+4. **Quality Gate 1:** Verify the pod is running, the PVC is bound, and you can reach the Letta API endpoint externally.
+
+### Stage 2: GitHub Action & Agent Configuration (Hours 5-8)
+**Goal:** Connect GitHub PRs to your self-hosted agent.
+
+1. **Create GitHub Secrets:** Store your Letta API key and the URL of your self-hosted server (`LETTA_BASE_URL`).
+2. **Configure GitHub Action:** (See Appendix A for YAML). Ensure the action uses `letta_base_url` to point to your K8s service.
+3. **Define Agent & Skills:** Via the Letta CLI connected to your server, create the agent and attach the `dependency-audit` and `architecture-advisory` skills.
+4. **Quality Gate 2:** Open a test PR. Verify the GitHub Action triggers, connects to your K8s server, and the agent responds.
+
+### Stage 3: Tooling & Reasoning (Hours 9-12)
+**Goal:** Add the custom dependency scripts and web search augmentation.
+
+1. **Containerize Tools:** Create a custom Dockerfile that extends the Letta server image and includes `python3`, `pip`, `osv-scanner`, and your `check_deps.py` script.
+2. **Rebuild & Redeploy:** Push the new image to your registry and update the Kubernetes Deployment.
+3. **Register Tools:** Use the Letta CLI to register `check_deps.py`, `osv-scanner`, and `augmented_web_search` as tools for the agent.
+4. **Quality Gate 3:** Trigger a PR with an outdated dependency. Verify the agent runs the script, checks the web, and posts a comment with version deltas and 5 architectural alternatives.
+
+### Stage 4: Memory Consolidation & Polish (Hours 13-16)
+**Goal:** Enable sleep-time consolidation and verify persistent memory.
+
+1. **Configure Sleep-Time:** Run `/sleeptime compaction` in the Letta CLI to enable the dream agent.
+2. **Test Memory Persistence:** Open PR #1. Wait for sleep-time consolidation. Open PR #2 referencing the same dependency. Verify the agent recalls the context from PR #1.
+3. **Monitor K8s Logs:** Check the pod logs to ensure the sleep-time agent is running without errors and committing to the MemFS git repo on the persistent volume.
+4. **Final Polish:** Refine the system prompt to ensure the 5 architectural alternatives are strictly advisory and well-formatted.
+
+---
+
+## 4. Appendix: Code & Configuration Snippets
+
+### Appendix A: GitHub Action Workflow (`.github/workflows/letta-pr-advisor.yml`)
+```yaml
+name: Letta PR Advisor
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  letta:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Point to your self-hosted Kubernetes server
+          letta_base_url: ${{ secrets.LETTA_BASE_URL }} 
+          agent_id: ${{ vars.LETTA_AGENT_ID }} # Reuse the same agent
+```
+
+### Appendix B: `check_deps.py` (Custom Dependency Tool)
+```python
+#!/usr/bin/env python3
+"""Scan repo for dependencies, check latest versions."""
+import json
+import sys
+import requests
+from pathlib import Path
+
+def check_npm(repo_path):
+    pkg_json = Path(repo_path) / "package.json"
+    if not pkg_json.exists(): return []
+    deps = json.load(open(pkg_json)).get("dependencies", {})
+    results = []
+    for name, current_ver in deps.items():
+        try:
+            r = requests.get(f"https://registry.npmjs.org/{name}/latest", timeout=5)
+            latest_ver = r.json().get("version")
+            if latest_ver and latest_ver != current_ver:
+                results.append({
+                    "ecosystem": "npm",
+                    "name": name,
+                    "current": current_ver,
+                    "latest": latest_ver,
+                    "update_available": True
+                })
+        except Exception:
+            continue
+    return results
+
+# Add check_pypi, check_go_mod, etc. as needed
+
+if __name__ == "__main__":
+    repo = sys.argv[1]
+    all_deps = check_npm(repo) # + check_pypi(repo)
+    print(json.dumps(all_deps, indent=2))
+```
+
+### Appendix C: Letta CLI Configuration Commands
+Run these commands via `letta` CLI connected to your K8s server:
+
+```bash
+# 1. Enable MemFS (Git-backed memory)
+/memfs enable
+
+# 2. Configure Sleep-Time (Dream) Agent for self-evaluation
+/sleeptime compaction
+
+# 3. Create Skills (via markdown files or inline)
+/skill create dependency-audit
+/skill create architecture-advisory
+```
+
+### Appendix D: K8s Deployment Manifest Snippet (`letta-deployment.yaml`)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: letta-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: letta-server
+  template:
+    metadata:
+      labels:
+        app: letta-server
+    spec:
+      containers:
+      - name: letta-server
+        image: letta/letta-server:latest # Replace with custom image if adding tools
+        ports:
+        - containerPort: 8283
+        volumeMounts:
+        - name: memfs-storage
+          mountPath: /root/.letta
+      volumes:
+      - name: memfs-storage
+        persistentVolumeClaim:
+          claimName: letta-pvc
+```

@@ -1,0 +1,324 @@
+Here is the continuation of the blueprint. This document provides the deep-dive technical specifications, code implementations, and operational procedures required to execute the plan.
+
+***
+
+```markdown
+# PR Advisory Agent Blueprint: Part 2 (Implementation Details)
+
+This document supplements the architectural blueprint with executable code, exact prompt definitions, and infrastructure manifests required for deployment.
+
+---
+
+## 1. Agent Persona & Skill Definitions
+
+The agent's behavior is governed by a core system prompt and two specialized skills loaded into its context.
+
+### Core System Prompt
+*Instruc: This is injected at the agent creation level via the Letta CLI or SDK.*
+
+```text
+You are an automated PR Advisory Agent. Your role is strictly advisory.
+You DO NOT modify source code, push commits, or approve PRs.
+
+For every PR triggered:
+1. Load the `dependency-audit` skill.
+2. Load the `architecture-advisory` skill.
+3. Analyze the provided PR diff and repository context.
+4. Generate a single, consolidated markdown comment containing:
+   - Dependency Version Analysis (Current vs. Latest)
+   - Security Vulnerabilities (if any)
+   - 5 Architectural Alternatives with Pros/Cons
+5. Post the comment using the GitHub comment tool.
+6. Save a summary of this PR's analysis to your MemFS (memory).
+```
+
+### Skill 1: `dependency-audit.md`
+*Location: Stored in MemFS under `system/skills/dependency-audit.md` (always loaded).*
+
+```markdown
+# Skill: Dependency Audit
+
+## When to use
+Triggered for every PR analysis to check dependency health.
+
+## Instructions
+1. Execute the shell command: `python3 /tools/check_deps.py $REPO_PATH`
+2. Execute the shell command: `python3 /tools/osv_scan.py $REPO_PATH`
+3. Cross-reference outdated dependencies with the `augmented_web_search` tool.
+   - Search for: "<package_name> changelog v<latest_version>"
+   - Use Firecrawl to scrape changelog URLs for specific breaking changes.
+4. Format findings as a markdown table with columns:
+   - Package | Current | Latest | Security Risk | Breaking Changes
+5. Do not suggest upgrading if the current version is a security patch and the latest is a major version jump without clear migration paths.
+```
+
+### Skill 2: `architecture-advisory.md`
+*Location: Stored in MemFS under `system/skills/architecture-advisory.md` (always loaded).*
+
+```markdown
+# Skill: Architectural Advisory
+
+## When to use
+Triggered for every PR to reason over system design.
+
+## Instructions
+1. Read the PR diff provided in the context.
+2. Check MemFS `patterns/` directory for known architectural patterns of this repo.
+3. Identify exactly 5 places in the PR diff where an alternative architectural pattern could be applied (e.g., using a Strategy pattern instead of conditionals, extracting a service, applying a decorator).
+4. For each of the 5 alternatives, provide:
+   - **Pattern Name**: (e.g., "Repository Pattern")
+   - **Description**: 1-2 sentences on how it applies to this specific code.
+   - **Pros**: 3 bullet points.
+   - **Cons**: 3 bullet points.
+   - **Migration Complexity**: Low / Medium / High.
+5. Be realistic. If the PR is a minor config change, suggest architectural improvements to the surrounding system context rather than the config itself.
+```
+
+---
+
+## 2. Custom Tool Implementations
+
+These scripts must be packaged into the custom Docker image built on top of `letta/letta-server`.
+
+### `augmented_web_search.py`
+*Aggregates Exa, Tavily, and Firecrawl for comprehensive web intelligence.*
+
+```python
+#!/usr/bin/env python3
+import os
+import requests
+import json
+import sys
+
+def search(query: str, search_type: str = "semantic"):
+    """
+    Routes search to appropriate provider.
+    search_type: 'semantic' (Exa), 'general' (Tavily), 'scrape' (Firecrawl)
+    """
+    if search_type == "semantic":
+        r = requests.post(
+            "https://api.exa.ai/search",
+            headers={"x-api-key": os.environ["EXA_API_KEY"]},
+            json={"query": query, "num_results": 3, "contents": {"text": True}},
+            timeout=10
+        )
+        return r.json()
+    
+    elif search_type == "general":
+        r = requests.post(
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}"},
+            json={"query": query, "max_results": 3},
+            timeout=10
+        )
+        return r.json()
+        
+    elif search_type == "scrape":
+        # Expects a URL in the query field
+        r = requests.post(
+            "https://api.firecrawl.dev/v0/scrape",
+            headers={"Authorization": f"Bearer {os.environ['FIRECRAWL_API_KEY']}"},
+            json={"url": query},
+            timeout=15
+        )
+        return r.json()
+
+if __name__ == "__main__":
+    # CLI interface for Letta shell execution
+    query = sys.argv[1]
+    search_type = sys.argv[2] if len(sys.argv) > 2 else "semantic"
+    print(json.dumps(search(query, search_type), indent=2))
+```
+
+### `osv_scan.py`
+*Wrapper for Google's OSV-Scanner to check for vulnerabilities.*
+
+```python
+#!/usr/bin/env python3
+import subprocess
+import json
+import sys
+import os
+
+def scan(repo_path: str):
+    """Runs OSV-Scanner and returns JSON output."""
+    try:
+        # Assuming osv-scanner is installed in the PATH
+        result = subprocess.run(
+            ["osv-scanner", "--lockfile", os.path.join(repo_path, "package-lock.json"), "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0 or result.stdout:
+            return json.loads(result.stdout)
+        return {"error": result.stderr}
+    except Exception as e:
+        return {"error": str(e)}
+
+if __name__ == "__main__":
+    repo = sys.argv[1]
+    print(json.dumps(scan(repo), indent=2))
+```
+
+---
+
+## 3. Kubernetes Infrastructure Manifests
+
+Complete manifests to deploy the Letta server with persistent MemFS storage.
+
+### `letta-pvc.yaml`
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: letta-memfs-pvc
+  namespace: ai-agents
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi  # Adjust based on memory growth
+  # storageClassName: standard # Uncomment and set if needed
+```
+
+### `letta-deployment.yaml`
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: letta-pr-advisor
+  namespace: ai-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: letta-pr-advisor
+  template:
+    metadata:
+      labels:
+        app: letta-pr-advisor
+    spec:
+      containers:
+      - name: letta-server
+        image: your-registry/letta-pr-advisor:latest # Custom image with tools
+        ports:
+        - containerPort: 8283
+        env:
+        - name: LETTA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: letta-secrets
+              key: api-key
+        - name: EXA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: web-search-secrets
+              key: exa-key
+        - name: TAVILY_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: web-search-secrets
+              key: tavily-key
+        - name: FIRECRAWL_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: web-search-secrets
+              key: firecrawl-key
+        volumeMounts:
+        - name: memfs-storage
+          mountPath: /root/.letta
+      volumes:
+      - name: memfs-storage
+        persistentVolumeClaim:
+          claimName: letta-memfs-pvc
+```
+
+### `letta-service.yaml`
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: letta-server
+  namespace: ai-agents
+spec:
+  selector:
+    app: letta-pr-advisor
+  ports:
+    - protocol: TCP
+      port: 8283
+      targetPort: 8283
+  type: ClusterIP # Use Ingress for external access
+```
+
+---
+
+## 4. MemFS Structure & Sleep-Time Management
+
+Understanding how memory grows and consolidates is critical.
+
+### Initial MemFS Structure
+When initialized via `/memfs enable`, the filesystem looks like this:
+```text
+/root/.letta/
+├── system/
+│   ├── config.md              # Agent persona and global config
+│   └── skills/
+│       ├── dependency-audit.md
+│       └── architecture-advisory.md
+├── history/                   # Empty initially
+└── patterns/                  # Empty initially
+```
+
+### Post-PR MemFS State
+After analyzing PR #42 (which updated `express` and added a new auth route):
+```text
+/root/.letta/
+├── history/
+│   └── pr-42.md               # Detailed log of PR 42 analysis
+├── patterns/
+│   ├── auth-strategies.md     # Updated: noticed basic auth used, noted JWT alternative
+│   └── express-upgrades.md    # Updated: logged migration from 4.18 to 5.0
+```
+
+### Sleep-Time Consolidation Configuration
+Run this via the Letta CLI connected to your server:
+
+```bash
+# 1. Enable Sleep-Time agents
+/sleeptime enable
+
+# 2. Configure trigger to 'compaction' (runs when context gets full)
+/sleeptime trigger compaction
+
+# 3. Configure the dream agent's instructions
+# The dream agent will automatically:
+# - Read all files in history/
+# - Extract recurring patterns into patterns/
+# - Prune old or irrelevant entries from history/
+# - Commit changes to the MemFS git repo
+```
+
+---
+
+## 5. Operational Checklist & Troubleshooting
+
+### Pre-Flight Checklist
+- [ ] K8s PVC is bound and persistent.
+- [ ] Letta server API is reachable via Ingress/Port-forward.
+- [ ] GitHub Secrets (`LETTA_API_KEY`, `LETTA_BASE_URL`) are set.
+- [ ] Custom tools (`check_deps.py`, `osv_scan.py`) are executable in the container.
+- [ ] Agent has both skills attached.
+- [ ] Sleep-time consolidation is enabled.
+
+### Monitoring Context Rot
+If the agent starts behaving erratically or ignoring instructions:
+1. Check the context window size in the Letta ADE (Agent Development Environment).
+2. If context is >90% full, manually trigger compaction: `/compact`
+3. Check the dream agent logs to ensure it is successfully pruning `history/`.
+
+### GitHub API Rate Limits
+The GitHub Action uses `GITHUB_TOKEN`. If you process >1000 PRs/hour, you may hit limits.
+- **Solution:** The agent's `post_github_comment` tool should implement exponential backoff. Letta's built-in tool execution handles retries, but monitor logs for 403 errors.
+```
