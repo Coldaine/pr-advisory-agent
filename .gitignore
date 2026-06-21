@@ -1,1 +1,4 @@
 .letta/
+.env
+.env.*
+!.env.example
