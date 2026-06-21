@@ -31,31 +31,35 @@ The design leverages **Letta Code** for its built-in agent harness and GitHub Ac
 
 ## 2. Architecture Overview
 
-This design uses a hybrid approach: the simplicity of the GitHub Action for PR integration, combined with the control and persistence of your self-hosted Kubernetes infrastructure.
+This design is fully self-hosted and event-driven. By routing GitHub webhooks directly to the self-hosted Letta Server on your Kubernetes cluster, we eliminate the need for a GitHub Actions runner entirely. The agent runs inside Kubernetes, clones the repository dynamically, runs the audit tools locally, posts the advisory comment, and cleans up.
 
 ```mermaid
 flowchart TD
-    A[GitHub PR Opened] --> B[Letta Code GitHub Action]
-    B --> C[Connects to Self-Hosted Letta Server<br/>via LETTA_BASE_URL]
+    A[GitHub Pull Request Event] -->|Webhook Event| B[Kubernetes Ingress / TLS]
+    B --> C[Webhook Handler Sidecar / Letta API]
     
     C --> D[Letta Server on Kubernetes]
     D --> E[Persistent Volume<br/>MemFS Git Repository]
     
     D --> F[Agent Instance]
-    F --> G[Tools: check_deps, OSV, Web Search]
+    F --> G[Tools: git_clone, check_deps, OSV, Web Search]
     F --> H[Skills: audit, advisory]
     F --> I[Sleep-Time Dream Agent<br/>Background consolidation]
     
-    F --> J[Posts Advisory Comment<br/>via GitHub Token]
-    J --> K[Updates MemFS on PV]
+    F -->|Clones PR Branch| J[Local Pod Workspace]
+    F -->|Runs check_deps/OSV| J
+    
+    F --> K[Posts Advisory Comment<br/>via GitHub API]
+    K --> L[Updates MemFS on PV]
 ```
 
 ### Core Components
-1. **Letta Code GitHub Action:** The entry point. It intercepts PR events, passes context to the agent, and enforces security boundaries (advisory-only).
-2. **Letta Server (K8s Deployment):** The agent runtime. Hosted on your Kubernetes cluster to maintain persistent state.
-3. **MemFS (Memory File System):** Letta's git-backed memory substrate stored on a K8s Persistent Volume (PVC). Replaces legacy memory blocks.
-4. **Sleep-Time Dream Agent:** A built-in background process that wakes up on context compaction triggers to evaluate recent PRs and consolidate memory patterns.
-5. **Skills & Tools:** The instructions (`architecture-advisory`) and capabilities (`check_deps.py`, web search) given to the agent.
+1. **GitHub Webhook:** Configured at the repository or organization level to forward `pull_request` events directly to your Kubernetes ingress endpoint.
+2. **Webhook Listener / API Gateway:** Receives the webhook, authenticates the GitHub signature, and translates it into a message query for the Letta Agent.
+3. **Letta Server (K8s Deployment):** The agent runtime. Hosted on your Kubernetes cluster to maintain persistent state.
+4. **MemFS (Memory File System):** Letta's git-backed memory substrate stored on a K8s Persistent Volume (PVC).
+5. **Sleep-Time Dream Agent:** A built-in background process that wakes up on context compaction triggers to evaluate recent PRs and consolidate memory patterns.
+6. **Custom Git Clone Tool:** A tool given to the agent to clone the target PR repository branch locally into the pod's temporary space.
 
 ---
 
@@ -65,28 +69,28 @@ flowchart TD
 **Goal:** Deploy the Letta Server to your cluster with persistent storage.
 
 1. **Create Kubernetes Manifests:**
-   * **Deployment:** Run the `letta/letta-server` Docker image.
-   * **Service:** Expose port 8283 internally.
-   * **PersistentVolumeClaim (PVC):** Provision storage for the MemFS git repository. This ensures memory survives pod restarts.
-2. **Configure Ingress:** Set up an Ingress route with TLS to expose the Letta server securely (e.g., `letta.yourdomain.com`).
+   * **Deployment:** Run the `letta/letta-server` Docker image along with a webhook handler sidecar.
+   * **Service:** Expose port 8283 and webhook receiver port internally.
+   * **PersistentVolumeClaim (PVC):** Provision storage for the MemFS git repository.
+2. **Configure Ingress:** Set up an Ingress route with TLS to expose the webhook receiver securely (e.g., `https://letta-webhooks.yourdomain.com/github`).
 3. **Initialize MemFS:** Exec into the pod and run `/memfs enable` to initialize the git-backed memory on the persistent volume.
-4. **Quality Gate 1:** Verify the pod is running, the PVC is bound, and you can reach the Letta API endpoint externally.
+4. **Quality Gate 1:** Verify the pod is running, the PVC is bound, and you can reach the server endpoints externally.
 
-### Stage 2: GitHub Action & Agent Configuration (Hours 5-8)
-**Goal:** Connect GitHub PRs to your self-hosted agent.
+### Stage 2: Webhook & Secret Provisioning (Hours 5-8)
+**Goal:** Configure GitHub to trigger the self-hosted agent directly.
 
-1. **Create GitHub Secrets:** Store your Letta API key and the URL of your self-hosted server (`LETTA_BASE_URL`).
-2. **Configure GitHub Action:** (See Appendix A for YAML). Ensure the action uses `letta_base_url` to point to your K8s service.
+1. **Create K8s Secrets:** Store your Letta API key, Webhook Verification Secret, and GitHub PAT/App Installation Token (`GITHUB_TOKEN`) in Kubernetes.
+2. **Configure GitHub Webhook:** Register a webhook in your GitHub repository pointing to your Ingress URL. Select event: `Pull requests`.
 3. **Define Agent & Skills:** Via the Letta CLI connected to your server, create the agent and attach the `dependency-audit` and `architecture-advisory` skills.
-4. **Quality Gate 2:** Open a test PR. Verify the GitHub Action triggers, connects to your K8s server, and the agent responds.
+4. **Quality Gate 2:** Trigger a test pull request. Verify that the webhook payload is delivered to Kubernetes, is parsed correctly, and triggers the agent on your server.
 
-### Stage 3: Tooling & Reasoning (Hours 9-12)
-**Goal:** Add the custom dependency scripts and web search augmentation.
+### Stage 3: Tooling & Dynamic Workspace Cloning (Hours 9-12)
+**Goal:** Implement the repository cloning tool and custom audit scripts.
 
-1. **Containerize Tools:** Create a custom Dockerfile that extends the Letta server image and includes `python3`, `pip`, `osv-scanner`, and your `check_deps.py` script.
-2. **Rebuild & Redeploy:** Push the new image to your registry and update the Kubernetes Deployment.
-3. **Register Tools:** Use the Letta CLI to register `check_deps.py`, `osv-scanner`, and `augmented_web_search` as tools for the agent.
-4. **Quality Gate 3:** Trigger a PR with an outdated dependency. Verify the agent runs the script, checks the web, and posts a comment with version deltas and 5 architectural alternatives.
+1. **Containerize Tools:** Create a custom Dockerfile that extends the Letta server image and includes `git`, `python3`, `pip`, `osv-scanner`, and your `check_deps.py` script.
+2. **Implement Clone Tool:** Write the `git_clone` tool logic that enables the agent to dynamically clone the incoming PR's branch to `/tmp/workspace` using the injected GitHub token.
+3. **Register Tools:** Register the `git_clone` tool, `check_deps.py`, `osv-scanner`, and search tools (`augmented_web_search`) to the agent.
+4. **Quality Gate 3:** Trigger a PR with an outdated dependency. Verify the agent clones the branch, runs the scripts locally, posts the comment, and cleans up the cloned files.
 
 ### Stage 4: Memory Consolidation & Polish (Hours 13-16)
 **Goal:** Enable sleep-time consolidation and verify persistent memory.
@@ -100,31 +104,57 @@ flowchart TD
 
 ## 4. Appendix: Code & Configuration Snippets
 
-### Appendix A: GitHub Action Workflow (`.github/workflows/letta-pr-advisor.yml`)
-```yaml
-name: Letta PR Advisor
-on:
-  pull_request:
-    types: [opened]
+### Appendix A: Webhook Receiver Listener (`webhook-handler.py`)
+*This runs as a lightweight service or sidecar in the Kubernetes pod to receive GitHub webhooks and trigger the Letta Agent via its REST API.*
 
-jobs:
-  letta:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - uses: letta-ai/letta-code-action@v0
-        with:
-          letta_api_key: ${{ secrets.LETTA_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Point to your self-hosted Kubernetes server
-          letta_base_url: ${{ secrets.LETTA_BASE_URL }} 
-          agent_id: ${{ vars.LETTA_AGENT_ID }} # Reuse the same agent
+```python
+from flask import Flask, request, jsonify
+import hmac
+import hashlib
+import os
+import requests
+
+app = Flask(__name__)
+
+LETTA_API_URL = "http://localhost:8283/v1/agents"
+AGENT_ID = os.environ.get("LETTA_AGENT_ID")
+LETTA_API_KEY = os.environ.get("LETTA_API_KEY")
+WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET").encode()
+
+@app.route("/github", methods=["POST"])
+def github_webhook():
+    # Verify GitHub Webhook Signature
+    signature = request.headers.get("X-Hub-Signature-256")
+    if not signature:
+        return "Missing signature", 401
+    
+    sha_name, signature = signature.split("=")
+    mac = hmac.new(WEBHOOK_SECRET, request.data, hashlib.sha256)
+    if not hmac.compare_digest(mac.hexdigest(), signature):
+        return "Invalid signature", 401
+
+    payload = request.json
+    action = payload.get("action")
+    
+    # We trigger the agent when a PR is opened or synchronized (updated)
+    if "pull_request" in payload and action in ["opened", "synchronize"]:
+        pr = payload["pull_request"]
+        repo = payload["repository"]
+        
+        # Build prompt payload for the agent
+        agent_payload = {
+            "message": f"Review PR #{pr['number']} in {repo['full_name']}. Branch: {pr['head']['ref']}. Clone URL: {pr['head']['repo']['clone_url']}"
+        }
+        
+        # Trigger the agent turn via Letta API
+        headers = {"Authorization": f"Bearer {LETTA_API_KEY}"}
+        r = requests.post(f"{LETTA_API_URL}/{AGENT_ID}/messages", json=agent_payload, headers=headers)
+        return jsonify({"status": "triggered", "agent_response": r.status_code})
+
+    return "Event ignored", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
 ```
 
 ### Appendix B: `check_deps.py` (Custom Dependency Tool)

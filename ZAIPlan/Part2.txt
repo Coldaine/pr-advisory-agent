@@ -21,15 +21,17 @@ You are an automated PR Advisory Agent. Your role is strictly advisory.
 You DO NOT modify source code, push commits, or approve PRs.
 
 For every PR triggered:
-1. Load the `dependency-audit` skill.
-2. Load the `architecture-advisory` skill.
-3. Analyze the provided PR diff and repository context.
-4. Generate a single, consolidated markdown comment containing:
+1. Parse the incoming message to extract the clone URL, branch, and PR number.
+2. Execute the `git_clone` tool to clone the PR branch to `/tmp/workspace` inside your container.
+3. Load the `dependency-audit` skill and execute dependency analysis against `/tmp/workspace`.
+4. Load the `architecture-advisory` skill and execute architectural analysis against `/tmp/workspace`.
+5. Generate a single, consolidated markdown comment containing:
    - Dependency Version Analysis (Current vs. Latest)
    - Security Vulnerabilities (if any)
    - 5 Architectural Alternatives with Pros/Cons
-5. Post the comment using the GitHub comment tool.
-6. Save a summary of this PR's analysis to your MemFS (memory).
+6. Post the comment to the pull request using your GitHub comment posting tool.
+7. Execute the workspace cleanup tool to delete `/tmp/workspace`.
+8. Save a summary of this PR's analysis to your MemFS (memory).
 ```
 
 ### Skill 1: `dependency-audit.md`
@@ -42,8 +44,8 @@ For every PR triggered:
 Triggered for every PR analysis to check dependency health.
 
 ## Instructions
-1. Execute the shell command: `python3 /tools/check_deps.py $REPO_PATH`
-2. Execute the shell command: `python3 /tools/osv_scan.py $REPO_PATH`
+1. Run the dependency script: `python3 /tools/check_deps.py /tmp/workspace`
+2. Run the security scan: `python3 /tools/osv_scan.py /tmp/workspace`
 3. Cross-reference outdated dependencies with the `augmented_web_search` tool.
    - Search for: "<package_name> changelog v<latest_version>"
    - Use Firecrawl to scrape changelog URLs for specific breaking changes.
@@ -62,9 +64,9 @@ Triggered for every PR analysis to check dependency health.
 Triggered for every PR to reason over system design.
 
 ## Instructions
-1. Read the PR diff provided in the context.
+1. Inspect the cloned source code under `/tmp/workspace`.
 2. Check MemFS `patterns/` directory for known architectural patterns of this repo.
-3. Identify exactly 5 places in the PR diff where an alternative architectural pattern could be applied (e.g., using a Strategy pattern instead of conditionals, extracting a service, applying a decorator).
+3. Identify exactly 5 places in the code where an alternative architectural pattern could be applied (e.g., using a Strategy pattern instead of conditionals, extracting a service, applying a decorator).
 4. For each of the 5 alternatives, provide:
    - **Pattern Name**: (e.g., "Repository Pattern")
    - **Description**: 1-2 sentences on how it applies to this specific code.
@@ -79,6 +81,45 @@ Triggered for every PR to reason over system design.
 ## 2. Custom Tool Implementations
 
 These scripts must be packaged into the custom Docker image built on top of `letta/letta-server`.
+
+### `git_clone.py`
+*Clones the target PR branch locally into the pod container workspace.*
+
+```python
+#!/usr/bin/env python3
+import subprocess
+import sys
+import os
+import shutil
+import json
+
+def clone(repo_url: str, branch: str, target_dir: str):
+    """Clones a specific branch of a GitHub repository to a local directory."""
+    if os.path.exists(target_dir):
+        shutil.rmtree(target_dir)
+        
+    # Inject GitHub Token for authentication
+    token = os.environ.get("GITHUB_TOKEN")
+    if token and "github.com" in repo_url:
+        repo_url = repo_url.replace("https://", f"https://x-access-token:{token}@")
+        
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "-b", branch, repo_url, target_dir],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        return {"status": "success", "message": f"Cloned {branch} to {target_dir}"}
+    except subprocess.CalledProcessError as e:
+        return {"status": "error", "message": e.stderr}
+
+if __name__ == "__main__":
+    url = sys.argv[1]
+    br = sys.argv[2]
+    dest = sys.argv[3] if len(sys.argv) > 3 else "/tmp/workspace"
+    print(json.dumps(clone(url, br, dest), indent=2))
+```
 
 ### `augmented_web_search.py`
 *Aggregates Exa, Tavily, and Firecrawl for comprehensive web intelligence.*
@@ -143,7 +184,6 @@ import os
 def scan(repo_path: str):
     """Runs OSV-Scanner and returns JSON output."""
     try:
-        # Assuming osv-scanner is installed in the PATH
         result = subprocess.run(
             ["osv-scanner", "--lockfile", os.path.join(repo_path, "package-lock.json"), "--format", "json"],
             capture_output=True,
