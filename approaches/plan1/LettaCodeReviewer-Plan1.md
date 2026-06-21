@@ -7,6 +7,23 @@
 
 ---
 
+## Reconciliation Status After Plan Correction
+
+The main plan in `approaches/plan1/Plan1.txt` has been corrected against the findings below:
+
+| Original finding | Current status |
+|:---|:---|
+| Wrong GitHub Action reference | Corrected to `letta-ai/letta-code-action@v0` |
+| Wrong/redundant CLI installation step | Removed from the workflow; optional local setup uses `npm install -g @letta-ai/letta-code` |
+| Non-dot `skills/` directory | Corrected to `.skills/` for custom skill examples |
+| Missing sticky comment configuration | Corrected with `use_sticky_comment: "true"` |
+| Missing model configuration | Corrected with `model: auto` |
+| `agent_id` stored as a secret | Corrected to `vars.LETTA_AGENT_ID` |
+| Silent scanner failures | Addressed in the agent configuration by requiring missing-tool disclosure and manifest fallback |
+| Forced "exactly 5" architecture findings | Corrected to "up to 5" viable alternatives |
+
+Remaining validation items: verify the current Letta agent creation CLI/API flow and sleep-time/self-evaluation command names before implementation.
+
 ## Critiques with Severity Grades
 
 ### CRITICAL — Would prevent the system from working
