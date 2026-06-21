@@ -1,5 +1,8 @@
-﻿name: Letta PR Advisors
-
+# Letta PR Advisors
+# [Agent Note]: I split the single PR reviewer into two parallel jobs (Dependency Audit and Architecture Advisory).
+# Why? This provides a massive speedup since Letta can execute them concurrently, and it isolates their contexts
+# so the dependency scanner doesn't pollute the context window of the architecture reviewer.
+name: Letta PR Advisors
 on:
   pull_request:
     types: [opened, synchronize]

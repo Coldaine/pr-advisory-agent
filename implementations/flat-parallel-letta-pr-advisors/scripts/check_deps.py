@@ -1,7 +1,12 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 check_deps.py: Scans a repository for dependencies, queries official
 registries for the latest versions, and returns structured JSON.
+
+[Agent Note]: I wrote this script to handle mechanical extraction of dependency versions.
+Why Python? I switched from the original Bash script plan because parsing PyPI requirements.txt
+and handling API pagination/errors is much more robust in Python. This ensures we don't crash
+the GitHub Action on bad JSON.
 """
 import json
 import sys
