@@ -1,0 +1,57 @@
+﻿apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: letta-pr-advisor
+  namespace: ai-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: letta-pr-advisor
+  template:
+    metadata:
+      labels:
+        app: letta-pr-advisor
+    spec:
+      containers:
+        - name: letta-server
+          image: letta/letta:latest # Deprecated product surface; pin in production.
+          ports:
+            - containerPort: 8283
+          env:
+            - name: LETTA_PG_URI
+              valueFrom:
+                secretKeyRef:
+                  name: letta-secrets
+                  key: letta-pg-uri
+            - name: LETTA_MEMFS_SERVICE_URL
+              value: local
+            - name: SECURE
+              value: "true"
+            - name: LETTA_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: letta-secrets
+                  key: letta-server-password
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: letta-secrets
+                  key: openai-api-key
+            - name: EXA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: web-search-secrets
+                  key: exa-api-key
+            - name: FIRECRAWL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: web-search-secrets
+                  key: firecrawl-api-key
+          volumeMounts:
+            - name: memfs-storage
+              mountPath: /root/.letta
+      volumes:
+        - name: memfs-storage
+          persistentVolumeClaim:
+            claimName: letta-memfs-pvc

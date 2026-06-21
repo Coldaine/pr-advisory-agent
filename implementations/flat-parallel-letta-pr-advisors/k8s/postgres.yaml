@@ -1,0 +1,50 @@
+﻿apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: letta-db
+  namespace: ai-agents
+spec:
+  serviceName: letta-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: letta-db
+  template:
+    metadata:
+      labels:
+        app: letta-db
+    spec:
+      containers:
+        - name: postgres
+          image: ankane/pgvector:v0.5.1
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: letta
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: letta-secrets
+                  key: postgres-password
+            - name: POSTGRES_DB
+              value: letta
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: letta-db
+  namespace: ai-agents
+spec:
+  selector:
+    app: letta-db
+  ports:
+    - port: 5432
+      targetPort: 5432
