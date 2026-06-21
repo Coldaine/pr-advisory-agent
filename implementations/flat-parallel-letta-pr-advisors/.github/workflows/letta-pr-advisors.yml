@@ -1,0 +1,92 @@
+# Letta PR Advisors
+# [Agent Note]: I split the single PR reviewer into two parallel jobs (Dependency Audit and Architecture Advisory).
+# Why? This provides a massive speedup since Letta can execute them concurrently, and it isolates their contexts
+# so the dependency scanner doesn't pollute the context window of the architecture reviewer.
+name: Letta PR Advisors
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dependency_audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependency tools
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install requests
+          go install github.com/google/osv-scanner/cmd/osv-scanner@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run Dependency Auditor
+        uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          letta_base_url: ${{ secrets.LETTA_BASE_URL }}
+          agent_id: ${{ vars.LETTA_DEP_AGENT_ID }}
+          model: haiku
+          use_sticky_comment: "true"
+          prompt: |
+            You are the Dependency Auditor. This PR needs dependency analysis.
+
+            Hard constraints:
+            - Advisory only. Do not modify code. Do not approve the PR.
+            - Use deterministic tools for live version/vulnerability data.
+            - Do not guess package versions from model memory.
+
+            Required work:
+            1. Run `python3 scripts/check_deps.py .` and capture the JSON output.
+            2. Locate supported lockfiles and run `osv-scanner --lockfile <lockfile> --format json` directly via shell.
+            3. Use Exa MCP for changelog and breaking-change context for meaningful outdated dependencies.
+            4. Use Firecrawl MCP to scrape specific changelog/docs pages when Exa returns a relevant page that needs deeper reading.
+            5. Post one advisory comment with dependency status: Package | Current | Latest | Security Risk | Breaking Changes.
+            6. Update your memory blocks and MemFS review history with what you flagged.
+
+  architecture_advisory:
+    name: Architecture Advisory
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Architectural Advisor
+        uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          letta_base_url: ${{ secrets.LETTA_BASE_URL }}
+          agent_id: ${{ vars.LETTA_ARCH_AGENT_ID }}
+          model: auto
+          use_sticky_comment: "true"
+          prompt: |
+            You are the Architectural Advisor. This PR needs architecture analysis.
+
+            Hard constraints:
+            - Advisory only. Do not modify code. Do not approve the PR.
+            - Do not pad. Provide up to 5 viable alternatives; fewer is correct when the PR does not justify 5 useful findings.
+            - Every finding must reference actual files/code.
+
+            Required work:
+            1. Run `git fetch origin ${{ github.base_ref }} --depth=1 || true`, then run `git diff origin/${{ github.base_ref }}...HEAD` to inspect the PR diff.
+            2. Read surrounding code and entry points, not only changed files.
+            3. Use Exa MCP for relevant architectural/library context.
+            4. Use Firecrawl MCP to scrape specific documentation pages when deeper docs are needed.
+            5. Post one advisory comment with viable alternatives: current approach, alternative, pros, cons, effort.
+            6. Update your memory blocks and MemFS review history with what you suggested.
