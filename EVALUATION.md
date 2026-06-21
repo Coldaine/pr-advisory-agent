@@ -230,38 +230,36 @@ Beyond high-level architectural gaps, the actual code scripts and prompts provid
 
 ---
 
-## The GitHub Runner Anti-Pattern in Self-Hosting (Plan 3)
+## Correcting the GitHub Runner Anti-Pattern in Plan 2 (Self-Hosted K8s)
 
-### The Anti-Pattern
-If you are already self-hosting the Letta Server on a Kubernetes cluster, relying on a **GitHub Actions runner** creates a convoluted hybrid loop:
+### The Hybrid Anti-Pattern in Plan 2's Original Form
+In its original form, Plan 2 proposed using a **GitHub Actions runner** in combination with the self-hosted Letta Server. This creates a convoluted hybrid loop:
 1. GitHub triggers the Actions runner.
-2. The runner checks out the code, installs the Letta Code CLI, and calls your remote K8s Letta Server.
-3. The K8s Server processes the prompt, but must execute the terminal/file tools *back* on the GitHub Actions runner where the CLI is running.
-4. This requires you to install and maintain all dependency audit tools (`pip-audit`, `cargo-outdated`, etc.) on the transient GitHub Action runner environment anyway.
+2. The runner checks out code, installs the Letta CLI, and calls the remote K8s Server.
+3. The K8s Server processes the prompt, but executes terminal/file tools *back* on the GitHub Actions runner where the CLI is running.
+4. This requires you to install and maintain all dependency audit tools (`pip-audit`, `cargo-outdated`, etc.) on the runner machine anyway.
 
-### The Correct Self-Hosted Pattern: Plan 3 (Fully Native Webhooks)
-By bypassing the GitHub Actions runner entirely, we can implement **Plan 3**:
-* **Trigger**: A direct GitHub Repository/Org Webhook sends `pull_request` payloads (e.g. `opened`, `synchronize`) directly to your Kubernetes cluster (via Ingress to a webhook receiver sidecar or API endpoint).
-* **Cloning**: The webhook handler invokes the Letta Server API to trigger the agent. The agent's first step is to run a local `git_clone` tool to clone the PR branch into `/tmp/workspace` inside the Kubernetes pod container using an injected GitHub token.
-* **Analysis**: The audit and architecture skills run directly against the cloned repo in the pod container (where tools like `osv-scanner` and python libraries are pre-baked in the Docker image).
-* **Delivery**: The agent posts the comment directly to the PR using the GitHub API, deletes `/tmp/workspace`, and updates its persistent MemFS memory.
-
-This eliminates GitHub runner usage, runtime tool installation, and the workspace context isolation gap.
+### The Corrected Plan 2: Native Self-Hosted Webhooks
+To resolve this anti-pattern and eliminate the GitHub Actions runner entirely, Plan 2 must be implemented as a fully native, event-driven architecture inside Kubernetes:
+* **Trigger**: A direct GitHub Webhook sends `pull_request` payloads (e.g. `opened`, `synchronize`) directly to your Kubernetes cluster Ingress.
+* **Cloning**: A webhook handler sidecar triggers the Letta Agent. The agent's first step is to run a local `git_clone` tool to clone the target PR branch into `/tmp/workspace` inside the Kubernetes pod container.
+* **Analysis**: The audit and architecture skills run directly against the cloned repo in the pod container (where tools like `osv-scanner` are pre-baked in the Docker image).
+* **Delivery**: The agent posts the comment directly to the PR via the GitHub API, deletes `/tmp/workspace`, and updates its MemFS memory.
 
 ---
 
-## Comparative Analysis
+## Comparative Analysis (Plan 1 vs. Plan 2 Corrected)
 
-| Dimension | Plan 1: Standard/Cloud | Plan 2: Hybrid Self-Hosted | Plan 3: Native Self-Hosted (Webhook) |
-|:---|:---|:---|:---|
-| **GitHub Action Runner** | Yes (runs Letta CLI & tools) | Yes (runs Letta CLI & tools) | **No** (bypassed completely) |
-| **Trigger Mechanism** | GitHub Action Workflow | GitHub Action Workflow | Direct GitHub Webhook to Ingress |
-| **Tool Execution Location** | GitHub Action Runner | GitHub Action Runner | Kubernetes Pod Container |
-| **Workspace Context** | Local checkout on runner | Local checkout on runner | Cloned dynamically to `/tmp/workspace` |
-| **Advisory-only enforcement** | Correct (`contents: read`) | Violated (`contents: write`) | Correct (Restricted API scopes) |
-| **Ecosystem Tools** | Restored/Installed on runner | Restored/Installed on runner | Pre-baked in Custom K8s Docker Image |
-| **Infrastructure Overhead** | None (managed cloud) | High (PostgreSQL, PVC, server) | High (PostgreSQL, PVC, Ingress, webhook sidecar) |
-| **Data Ownership** | Stored on Letta Cloud | 100% on PVC | 100% on PVC |
+| Dimension | Plan 1: Standard/Cloud | Plan 2: Self-Hosted K8s (Corrected) |
+|:---|:---|:---|
+| **GitHub Action Runner** | Yes (runs Letta CLI & tools) | **No** (bypassed completely via webhooks) |
+| **Trigger Mechanism** | GitHub Action Workflow | Direct GitHub Webhook to Ingress |
+| **Tool Execution Location** | GitHub Action Runner | Kubernetes Pod Container |
+| **Workspace Context** | Local checkout on runner | Cloned dynamically to `/tmp/workspace` |
+| **Advisory-only enforcement** | Correct (`contents: read` only) | Correct (Restricted API/token scopes) |
+| **Ecosystem Tools** | Restored/Installed on runner | Pre-baked in Custom K8s Docker Image |
+| **Infrastructure Overhead** | None (managed cloud) | High (PostgreSQL, PVC, Ingress, webhook handler) |
+| **Data Ownership** | Stored on Letta Cloud | 100% on PVC |
 
 ---
 
@@ -269,9 +267,9 @@ This eliminates GitHub runner usage, runtime tool installation, and the workspac
 
 Based on this evaluation:
 
-1. **If self-hosting is a hard requirement**: 
-   * **Do not use Plan 2.** It introduces a convoluted hybrid loop and requires installing tools on both the pod and runner.
-   * **Implement Plan 3 (Native Webhooks)** instead. This keeps tool execution and state entirely inside Kubernetes and simplifies the GitHub configuration to a simple webhook.
-2. **If developer velocity and quick setup are the primary goals**:
-   * **Start with Plan 1 (Standard/Cloud)**. It is the easiest to implement. Just apply the CLI installation and Action version name corrections listed in Part A. You can easily migrate the custom skills and prompts to a self-hosted server (Plan 3) later.
+1. **If self-hosting is a requirement**: 
+   * **Proceed with Plan 2 (Kubernetes)**, but implement it using the **corrected runner-less webhook pattern** instead of the hybrid runner model. This ensures all tool execution and repository scanning are kept entirely secure inside your Kubernetes container, solving the workspace context gap.
+2. **If developer velocity is the primary goal**:
+   * **Proceed with Plan 1 (Standard/Cloud)**. Apply the CLI installation and Action version name corrections listed in Part A. This is the fastest path to a working agent, and you can easily migrate the custom skills and prompts to Kubernetes (Plan 2) later.
+
 
