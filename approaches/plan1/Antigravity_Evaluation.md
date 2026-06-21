@@ -4,6 +4,18 @@ This document contains criticisms and actionable suggestions for **Plan 1** (`ap
 
 ---
 
+## Reconciliation Status
+
+The current `Plan1.txt` applies the evaluation's core fixes:
+
+- Uses `letta-ai/letta-code-action@v0`.
+- Removes the broken workflow-level curl installer.
+- Uses `.skills/` for custom skill locations.
+- Adds sticky comment behavior and `model: auto`.
+- Uses `vars.LETTA_AGENT_ID` instead of a secret for the agent identifier.
+- Requires missing scanner tools to be disclosed so the agent can fall back to manifest parsing.
+- Changes architecture advice from a hard quota to up to 5 viable alternatives.
+
 ## 1. Technical Defects & Criticisms
 
 ### A. Redundant & Broken CLI Installation

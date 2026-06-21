@@ -1,20 +1,27 @@
-I am thrilled that we've landed on the perfect architecture for your needs. Here is the complete, consolidated blueprint packaged as a single Markdown document. You can copy the content below and save it as `PR_Advisory_Agent_Blueprint.md`.
+# PR Advisory Agent Blueprint: Letta Code + Kubernetes (Flat Parallel Architecture)
 
-> **Revision Note:** This plan has been reviewed by Letta Code and corrected for:
-> - Wrong Docker image name (`letta/letta-server` → `letta/letta`)
-> - Missing PostgreSQL/pgvector dependency
-> - Missing `LETTA_MEMFS_SERVICE_URL=local` for MemFS enablement
-> - Missing server authentication (`SECURE`, `LETTA_SERVER_PASSWORD`)
-> - Missing Namespace and Ingress manifests
-> - Unverified CLI commands (`/memfs enable`, `/skill create`) replaced with real mechanisms
-> - `osv-scanner` is a Go binary, not pip-installable
-> - Concurrency bottleneck (single-agent problem) acknowledged and addressed
-> - `git clone --depth 1` cannot compute PR diffs — fixed to fetch base branch
-> - Missing Stage 0: Agent Initialization
-> - `check_deps.py` expanded beyond npm-only coverage
+> **Revision Note:** This plan has been reviewed and corrected by Letta Code for:
+> - Architecture: flat parallel independent agents (no orchestrator, no webhook sidecar)
+> - GitHub Action: `letta-ai/letta-code-action@v0` (not `letta-ai/letta-code@v1`)
+> - `prompt` input added (required for auto-triggering on every PR — without it, the action only fires on @letta-code mentions)
+> - `use_sticky_comment: "true"` (prevents comment spam on synchronize events)
+> - `model` set per agent (not defaulting to expensive opus on every PR)
+> - `contents: read` only (advisory-only — no `contents: write`)
+> - `fetch-depth: 0` (agent can compute git diff against base branch)
+> - `osv-scanner` installed via `go install` with GITHUB_PATH (it's a Go binary, not pip)
+> - Docker image: `letta/letta` (not `letta/letta-server` — that image doesn't exist)
+> - PostgreSQL/pgvector dependency added (required by Letta server)
+> - `LETTA_MEMFS_SERVICE_URL=local` added (required to enable MemFS)
+> - `SECURE=true` + `LETTA_SERVER_PASSWORD` added (server auth)
+> - Namespace manifest added
+> - MCP servers for Exa and Firecrawl (not custom Python wrappers — that's an anti-pattern)
+> - No `osv_scan.py` wrapper — agent runs `osv-scanner` directly via shell
+> - No `git_clone.py` — `actions/checkout` handles the repo on the runner
+> - Stage 0: Agent Initialization added (agent must be created before PRs can trigger it)
 > - MemFS and memory blocks coexist (MemFS does not "replace" blocks)
 > - Docker image deprecation acknowledged
-> - Rate limit note corrected
+> - Concurrency: two independent agents solve the single-agent bottleneck
+> - `Plan2_Cluster_Baseline_Addendum.md` is the governing cluster baseline: GitHub Actions hosts repository execution; Kubernetes hosts Letta state, memory, ingress/TLS, and backing services.
 
 ***
 
@@ -22,121 +29,137 @@ I am thrilled that we've landed on the perfect architecture for your needs. Here
 # PR Advisory Agent Blueprint: Letta Code + Kubernetes
 
 ## Executive Summary
-This document outlines the architecture and implementation plan for an AI-driven PR Advisory Agent. The agent comments on every Pull Request, analyzing dependency versions and suggesting architectural alternatives.
 
-The design leverages **Letta Code** for its built-in agent harness, ensuring strict advisory-only boundaries. State and memory are persisted using a **Self-Hosted Letta Server on Kubernetes**, utilizing Letta's **MemFS** (git-backed filesystem) alongside **memory blocks** (always-in-context directives) for cross-PR learning, and **Sleep-Time Dream Agents** for automated self-evaluation and memory consolidation.
+Two independent agents, each with a specific job, both triggered by the same GitHub Action workflow. They run in parallel, each posts its own comment to the PR, and each has its own memory (MemFS) and self-evaluation (Sleep-Time) loop.
 
-> **Deprecation Notice:** The `letta/letta` Docker image is no longer actively maintained or supported as a Letta product surface (per official docs: https://docs.letta.com/guides/docker/). This plan uses it because self-hosting on K8s requires it, but you should accept the maintenance risk. For alternatives, consider Letta Code local mode (`letta --backend local`) on a persistent machine accessible via Tailscale.
+- **Agent 1: Dependency Auditor** — runs `check_deps.py` and `osv-scanner`, posts dependency version deltas and vulnerabilities.
+- **Agent 2: Architectural Advisor** — reads the PR diff, uses web search (Exa MCP + Firecrawl MCP), posts up to 5 viable architectural alternatives with pros/cons.
+
+No orchestrator. No webhook sidecar. No custom Flask app. The GitHub Action runs on the GitHub runner where the repo is checked out, tools execute there, and `letta_base_url` points the CLI to the self-hosted Letta server on K8s for LLM calls and persistent memory.
+
+> **Deprecation Notice:** The `letta/letta` Docker image is no longer actively maintained (https://docs.letta.com/guides/docker/). This plan uses it because K8s self-hosting requires it. Accept the maintenance risk, or consider Letta Code local mode on a persistent machine.
 
 ---
 
 ## 1. Requirements Mapping
 
-| Requirement | Implementation in this Design |
+| Requirement | Implementation |
 | :--- | :--- |
-| **PR Coverage** | GitHub webhook forwards `pull_request: [opened, synchronize]` events directly to the K8s ingress. |
-| **Advisory Only** | Agent's system prompt enforces advisory-only behavior. GitHub token scoped to `pull-requests: write` only (no `contents: write`). Agent cannot push code or approve PRs. |
-| **Dependency Analysis** | Custom `check_deps.py` script covering npm, pip, cargo, go, and ruby. Executed via Letta's shell tool inside the K8s pod. |
-| **Version Checking** | Direct package registry API queries (npm, PyPI, crates.io, etc.) plus optional `augmented_web_search` (Exa + Tavily) for changelog context. |
-| **Architectural Alternatives** | LLM reasoning guided by the `architecture-advisory` skill to generate 5 alternatives with pros/cons. |
-| **Agent-Driven** | Letta Code provides a full agent harness with LLM reasoning, not a rigid script. |
-| **Fully-Featured Harness** | Letta Code natively provides file read, shell execution, and PR commenting tools. |
-| **Persistent Memory** | MemFS (git-backed filesystem) stored on a Kubernetes Persistent Volume (PVC), coexisting with memory blocks (always-in-context agent directives). |
-| **Periodic Self-Evaluation** | Letta's built-in Sleep-Time Dream Agents (compaction-triggered) reflect on recent PRs and consolidate memory. |
-| **Rapid Implementation** | 1-day, 5-stage deployment plan (including Stage 0: Agent Initialization) leveraging K8s infrastructure and GitHub webhooks. |
+| **PR Coverage** | GitHub Action triggers on `pull_request: [opened, synchronize]` with `prompt` input for both agents. |
+| **Advisory Only** | `contents: read` + `pull-requests: write` only. No `contents: write`. Agent cannot push code or approve PRs. |
+| **Dependency Analysis** | `check_deps.py` (deterministic script) + `osv-scanner` (Go binary, run directly via shell). |
+| **Version Checking** | Direct package registry API queries via `check_deps.py`. Exa MCP for changelog context. |
+| **Architectural Alternatives** | LLM reasoning guided by `architecture-advisory` skill. Firecrawl MCP for scraping relevant docs. Produces up to 5 viable alternatives; fewer is correct when the PR does not justify 5. |
+| **Agent-Driven** | Letta Code — full agent harness with LLM reasoning, not a rigid script. |
+| **Fully-Featured Harness** | Letta Code built-in tools: file read, shell execution, web search, MCP servers. No custom tool wrappers. |
+| **Persistent Memory** | MemFS (git-backed) on K8s PVC + memory blocks (always-in-context). Both coexist. |
+| **Periodic Self-Evaluation** | Sleep-Time Dream Agents per agent, compaction-triggered. |
+| **Rapid Implementation** | 5-stage plan (including Stage 0: Agent Init). |
 
 ---
 
 ## 2. Architecture Overview
 
-This design is fully self-hosted and event-driven. GitHub webhooks forward `pull_request` events directly to the self-hosted Letta Server on your Kubernetes cluster. The agent runs inside Kubernetes, clones the repository dynamically (fetching both the PR branch and base branch for diff computation), runs the audit tools locally, posts the advisory comment via GitHub API, and cleans up.
-
-> **Concurrency Warning:** Letta agents are stateful and single-threaded. If multiple PRs are opened simultaneously, they will be processed sequentially. PR #2 and #3 will queue behind PR #1. For high-volume repos, you need either:
-> - A **pool of agent IDs** with a load-balancing webhook handler, or
-> - A **main agent that dispatches ephemeral worker sub-agents** via Letta's subagent API, or
-> - Accept sequential processing and set GitHub Action timeout expectations accordingly.
->
-> This plan uses a single agent for simplicity. Upgrade to a pool if PR volume causes timeouts.
-
 ```mermaid
 flowchart TD
-    A[GitHub Pull Request Event] -->|Webhook| B[Kubernetes Ingress / TLS]
-    B --> C[Webhook Handler Sidecar]
-    C -->|Verify signature| C2[Reject invalid]
-    C -->|Valid| D[Letta Server on Kubernetes]
-    D --> E[Persistent Volume<br/>MemFS Git Repository]
-    D --> DB[(PostgreSQL + pgvector)]
+    A[PR Opened or Updated] --> B[GitHub Action Workflow]
 
-    D --> F[Agent Instance]
-    F --> G[Tools: git_clone, check_deps, OSV, Web Search]
-    F --> H[Skills: audit, advisory]
-    F --> I[Sleep-Time Dream Agent<br/>Background consolidation]
+    B --> C[Job 1: Dependency Audit]
+    B --> D[Job 2: Architectural Advisory]
 
-    F -->|Clones PR branch + base| J[Local Pod Workspace<br/>/tmp/workspace]
-    F -->|Computes git diff| J
-    F -->|Runs check_deps/OSV| J
+    subgraph GitHubRunner [GitHub Action Runner]
+        C --> E[Run check_deps.py]
+        C --> F[Run osv-scanner directly]
+        D --> G[Read PR diff via git]
+        D --> H[Exa MCP + Firecrawl MCP for context]
+    end
 
-    F --> K[Posts Advisory Comment<br/>via GitHub API Token]
-    K --> L[Updates MemFS on PV]
-    F -->|Cleanup| M[Delete /tmp/workspace]
+    E --> I[Dep Agent on K8s<br/>agent_id: vars.LETTA_DEP_AGENT_ID]
+    F --> I
+    G --> J[Arch Agent on K8s<br/>agent_id: vars.LETTA_ARCH_AGENT_ID]
+    H --> J
+
+    subgraph K8s [Your Kubernetes Cluster]
+        I[Dep Agent] --> K[MemFS + Memory Blocks]
+        I --> L[Sleep-Time Dream 1]
+        J[Arch Agent] --> M[MemFS + Memory Blocks]
+        J --> N[Sleep-Time Dream 2]
+        K --> DB[(PostgreSQL + pgvector)]
+    end
+
+    I --> O[Posts Comment 1<br/>Dependency Status]
+    J --> P[Posts Comment 2<br/>Up to 5 Architectural Alternatives]
 ```
 
-### Core Components
-1. **GitHub Webhook:** Configured at the repository or organization level to forward `pull_request` events directly to your Kubernetes ingress endpoint.
-2. **Webhook Listener / API Gateway:** A lightweight Flask sidecar that receives the webhook, authenticates the GitHub signature, and translates it into a message for the Letta Agent via the REST API.
-3. **Letta Server (K8s Deployment):** The agent runtime. Uses the `letta/letta` Docker image (deprecated but functional). Requires PostgreSQL with pgvector as its database backend.
-4. **PostgreSQL + pgvector:** Required database for the Letta server. Deployed as a separate StatefulSet or Deployment with its own PVC.
-5. **MemFS (Memory File System):** Letta's git-backed memory substrate stored on a K8s Persistent Volume (PVC). Enabled via the `LETTA_MEMFS_SERVICE_URL=local` environment variable. Coexists with memory blocks (always-in-context agent directives).
-6. **Memory Blocks:** Editable segments of the agent's system prompt, always loaded into context. Used for `advisory-config` (read-only directives), `team-patterns` (learned patterns), and `dependency-tracking` (flagged deps). These are NOT replaced by MemFS — they serve different purposes.
-7. **Sleep-Time Dream Agent:** A built-in background process that wakes up on context compaction triggers to evaluate recent PRs and consolidate memory patterns.
-8. **Custom Git Clone Tool:** A tool given to the agent to clone the target PR repository branch AND the base branch locally into the pod's temporary space, enabling `git diff` computation.
+### Why Flat Parallel, Not an Orchestrator
+
+1. **True Independence:** If the Dependency Agent fails because `osv-scanner` crashes, the Architectural Agent still posts its comment. They don't block each other.
+2. **Simpler State:** No complex inter-agent communication. Each agent is its own self-contained loop.
+3. **Faster:** They run in parallel on GitHub's infrastructure, cutting time-to-comment in half.
+4. **Right Division of Labor:** Specialized, adaptable agents rather than one monolithic script.
+
+### Tool Architecture: MCP Servers, Not Custom Wrappers
+
+> **Anti-pattern avoided:** We do NOT write custom Python wrappers for Exa, Tavily, or Firecrawl. These services have MCP servers. Letta Code supports MCP servers natively. The agent calls them as MCP tools, not via hand-rolled scripts.
+
+| Capability | Mechanism | Why |
+|:---|:---|:---|
+| Package version checking | `check_deps.py` (deterministic script) | LLMs have training cutoffs and hallucinate versions. Script queries live registries. |
+| Vulnerability scanning | `osv-scanner` (Go binary, direct shell) | Agent runs it directly via shell tool. No wrapper needed. |
+| Web search (changelogs, docs) | Exa MCP server (remote-hosted) | Built-in MCP support. No custom wrapper. |
+| Web scraping (specific pages) | Firecrawl MCP server (remote-hosted) | Built-in MCP support. No custom wrapper. |
+| File reading | Letta Code built-in `Read` tool | Not a custom script. |
+| Shell execution | Letta Code built-in `Bash` tool | Not a custom script. |
+| Git diff | Letta Code built-in `Bash` tool (`git diff`) | Agent runs git directly. |
+| PR commenting | Letta Code GitHub Action (built-in) | Action handles comment posting via `github_token`. |
 
 ---
 
-## 3. Implementation Plan (1-Day, 5 Stages)
+## 3. Implementation Plan (5 Stages)
 
 ### Stage 0: Agent Initialization (Pre-Deployment)
-**Goal:** Create the PR Advisory Agent with its system prompt, skills, and memory blocks before any PR can trigger it.
+**Goal:** Create both agents with their system prompts, skills, and memory blocks before any PR can trigger them.
 
-1. **Port-forward to the Letta server** (once Stage 1 is complete):
+1. **Deploy the K8s server** (Stage 1) — then port-forward:
    ```bash
    kubectl -n ai-agents port-forward svc/letta-server 8283:8283
    ```
 
-2. **Create the agent** using the Letta SDK or CLI:
-   ```bash
-   # Using the Letta Python SDK
-   pip install letta
-   python3 -c "
+2. **Create Agent 1: Dependency Auditor** using the Letta SDK:
+   ```python
    from letta import Letta
    client = Letta(base_url='http://localhost:8283/v1')
 
-   # Create the agent with system prompt
-   agent = client.agents.create(
-       name='PR Advisory Agent',
+   dep_agent = client.agents.create(
+       name='Dependency Auditor',
        memory_blocks=[
-           {'label': 'advisory-config', 'value': 'You are strictly advisory. Do not modify code. Do not approve PRs...', 'read_only': True},
+           {'label': 'advisory-config', 'value': 'You are strictly advisory...', 'read_only': True},
            {'label': 'team-patterns', 'value': 'No data yet.', 'read_only': False},
-           {'label': 'dependency-tracking', 'value': 'No dependencies flagged yet.', 'read_only': False},
+           {'label': 'dependency-tracking', 'value': 'No deps flagged.', 'read_only': False},
        ]
    )
-   print(f'Agent ID: {agent.id}')
-   "
+   print(f'Dependency Agent ID: {dep_agent.id}')
    ```
 
-3. **Upload skill files** to the agent's MemFS:
-   - Create `.skills/dependency-audit/SKILL.md`
-   - Create `.skills/architecture-advisory/SKILL.md`
+3. **Create Agent 2: Architectural Advisor** with its own memory blocks.
 
-4. **Store the `agent_id`** in a Kubernetes Secret:
+4. **Upload skill files** to each agent's MemFS:
+   - `.skills/dependency-audit/SKILL.md` → Agent 1
+   - `.skills/architecture-advisory/SKILL.md` → Agent 2
+
+5. **Connect MCP servers** to both agents via the Letta API:
+   - Exa MCP server (remote-hosted) → both agents
+   - Firecrawl MCP server (remote-hosted) → Agent 2 (architectural advisor)
+
+6. **Store both `agent_id`s** as GitHub repository variables:
    ```bash
-   kubectl -n ai-agents create secret generic letta-agent-config \
-     --from-literal=agent-id=<the-returned-agent-id>
+   gh variable set LETTA_DEP_AGENT_ID --body "<dep_agent.id>"
+   gh variable set LETTA_ARCH_AGENT_ID --body "<arch_agent.id>"
    ```
 
-5. **Quality Gate 0:** Verify the agent exists, has the correct system prompt, and has both skills loaded.
+7. **Quality Gate 0:** Verify both agents exist with correct prompts, skills, and MCP connections.
 
-### Stage 1: Kubernetes Deployment & Storage (Hours 1-4)
+### Stage 1: Kubernetes Deployment & Storage
 **Goal:** Deploy the Letta Server and PostgreSQL to your cluster with persistent storage.
 
 1. **Create Namespace:**
@@ -145,298 +168,297 @@ flowchart TD
    ```
 
 2. **Deploy PostgreSQL with pgvector:**
-   - **StatefulSet:** Run `ankane/pgvector:v0.5.1` with a PVC for data persistence.
-   - **Service:** Expose port 5432 internally.
-   - **Secret:** Store PostgreSQL credentials.
+   - StatefulSet: `ankane/pgvector:v0.5.1` with PVC for data.
+   - Service: port 5432 internal.
+   - Secret: PostgreSQL credentials.
 
 3. **Deploy Letta Server:**
-   - **Deployment:** Run the `letta/letta:latest` Docker image.
-   - **Environment:** Configure `LETTA_PG_URI`, `LETTA_MEMFS_SERVICE_URL=local`, `SECURE=true`, `LETTA_SERVER_PASSWORD`, and LLM API keys.
-   - **Service:** Expose port 8283 internally.
-   - **PVC:** Provision storage for the MemFS git repository.
+   - Deployment: `letta/letta:latest` (deprecated but functional).
+   - Environment: `LETTA_PG_URI`, `LETTA_MEMFS_SERVICE_URL=local`, `SECURE=true`, `LETTA_SERVER_PASSWORD`, LLM API keys.
+   - Service: port 8283 internal.
+   - PVC: storage for MemFS git repository.
 
-4. **Configure Ingress:** Set up an Ingress route with TLS to expose the webhook receiver securely (e.g., `https://letta-webhooks.yourdomain.com/github`).
+4. **Configure Ingress** with TLS so the GitHub runner can reach the server over HTTPS (`letta_base_url`). The ADE requires HTTPS for remote connections.
 
-5. **Quality Gate 1:** Verify both pods are running, PVCs are bound, PostgreSQL is healthy, and you can reach the Letta API endpoint.
+5. **Quality Gate 1:** Both pods running, PVCs bound, PostgreSQL healthy, Letta API reachable.
 
-### Stage 2: Webhook & Secret Provisioning (Hours 5-8)
-**Goal:** Configure GitHub to trigger the self-hosted agent directly.
+### Stage 2: GitHub Action Configuration
+**Goal:** Connect GitHub PRs to both agents via parallel jobs.
 
-1. **Create K8s Secrets:** Store your Letta API key, Webhook Verification Secret, GitHub PAT (for posting comments), and LLM API keys in Kubernetes.
-   ```bash
-   kubectl -n ai-agents create secret generic letta-secrets \
-     --from-literal=api-key=<your-letta-api-key> \
-     --from-literal=server-password=<your-server-password> \
-     --from-literal=github-token=<github-pat-with-pr-comment-scope> \
-     --from-literal=webhook-secret=<github-webhook-secret>
-   ```
+1. **Create GitHub Secrets:**
+   - `LETTA_API_KEY` — Letta server API key
+   - `LETTA_BASE_URL` — `https://letta.yourdomain.com` (your Ingress URL)
 
-2. **Configure GitHub Webhook:** Register a webhook in your GitHub repository pointing to your Ingress URL. Select event: `Pull requests`. Set the secret to match `webhook-secret`.
+2. **Create GitHub Variables:**
+   - `LETTA_DEP_AGENT_ID` — Agent 1's ID
+   - `LETTA_ARCH_AGENT_ID` — Agent 2's ID
 
-3. **Deploy Webhook Handler:** Deploy the Flask webhook handler (see Appendix A) as a sidecar or separate service.
+3. **Create the workflow file** (see Appendix A).
 
-4. **Quality Gate 2:** Trigger a test pull request. Verify that the webhook payload is delivered to Kubernetes, is parsed correctly, and triggers the agent on your server.
+4. **Quality Gate 2:** Open a test PR. Verify both jobs trigger, both agents respond, both comments appear.
 
-### Stage 3: Tooling & Dynamic Workspace Cloning (Hours 9-12)
-**Goal:** Implement the repository cloning tool and custom audit scripts.
+### Stage 3: Skill & Tool Refinement
+**Goal:** Write the skills and `check_deps.py`, install `osv-scanner` on the runner.
 
-1. **Build Custom Docker Image:** Create a Dockerfile that extends `letta/letta:latest` and includes:
-   ```dockerfile
-   FROM letta/letta:latest
+1. **Write `check_deps.py`** (see Appendix B) — deterministic registry queries with WHY NOT LLM rationale.
 
-   # Install Python and pip
-   RUN apt-get update && apt-get install -y python3 python3-pip git
+2. **Write skill files:**
+   - `.skills/dependency-audit/SKILL.md` — instructions for Agent 1
+   - `.skills/architecture-advisory/SKILL.md` — instructions for Agent 2
 
-   # Install Python dependencies
-   RUN pip3 install requests flask
+3. **Verify MCP server connectivity** — Exa and Firecrawl MCP servers respond to agent tool calls.
 
-   # Install osv-scanner (Go binary, NOT pip)
-   RUN apt-get install -y golang-go && \
-       go install github.com/google/osv-scanner/cmd/osv-scanner@latest && \
-       cp /root/go/bin/osv-scanner /usr/local/bin/ && \
-       apt-get remove -y golang-go
+4. **Quality Gate 3:** Trigger a PR with an outdated dependency. Verify both agents post comments with correct data.
 
-   # Copy custom tools
-   COPY tools/check_deps.py /tools/check_deps.py
-   COPY tools/osv_scan.py /tools/osv_scan.py
-   COPY tools/git_clone.py /tools/git_clone.py
-   COPY tools/augmented_web_search.py /tools/augmented_web_search.py
-   ```
-
-2. **Implement Clone Tool:** The `git_clone` tool must fetch BOTH the PR branch and the base branch so the agent can compute `git diff`:
-   ```python
-   # Clone base branch (e.g., main) AND PR branch
-   subprocess.run(["git", "clone", "--bare", repo_url, target_dir], check=True)
-   subprocess.run(["git", "--git-dir", target_dir, "fetch", "origin", f"pull/{pr_number}/head:pr-{pr_number}"], check=True)
-   # Now the agent can run: git --git-dir=<target_dir> diff main...pr-{pr_number}
-   ```
-
-3. **Register Tools:** Register the `git_clone`, `check_deps`, `osv_scan`, and `augmented_web_search` tools with the agent via the Letta API.
-
-4. **Quality Gate 3:** Trigger a PR with an outdated dependency. Verify the agent clones the repo, computes the diff, runs the scripts, posts the comment, and cleans up.
-
-### Stage 4: Memory Consolidation & Polish (Hours 13-16)
+### Stage 4: Memory Consolidation & Polish
 **Goal:** Enable sleep-time consolidation and verify persistent memory.
 
-1. **Configure Sleep-Time:** Enable dream agents for self-evaluation. Verify the correct CLI command or API endpoint — check current Letta docs for the exact mechanism. The dream agent should be configured to:
-   - Read all files in `history/`
-   - Extract recurring patterns into `patterns/`
-   - Prune old or irrelevant entries from `history/`
-   - Commit changes to the MemFS git repo
+1. **Configure Sleep-Time** for both agents (verify exact CLI command against current Letta docs — the concept is real, the command may be `/sleeptime`, `/reflect`, or API-based).
 
-2. **Test Memory Persistence:** Open PR #1. Wait for sleep-time consolidation. Open PR #2 referencing the same dependency. Verify the agent recalls the context from PR #1.
+2. **Test Memory Persistence:** Open PR #1. Wait for consolidation. Open PR #2 referencing the same dependency. Verify the agent recalls context from PR #1.
 
-3. **Monitor K8s Logs:** Check the pod logs to ensure the sleep-time agent is running without errors and committing to the MemFS git repo on the persistent volume.
-
-4. **Final Polish:** Refine the system prompt to ensure the 5 architectural alternatives are strictly advisory and well-formatted.
+3. **Quality Gate 4:** Both agents learn from past reviews and don't repeat stale suggestions.
 
 ---
 
-## 4. Appendix: Code & Configuration Snippets
+## 4. Appendix: Code & Configuration
 
-### Appendix A: Webhook Receiver Listener (`webhook-handler.py`)
-*This runs as a lightweight service or sidecar in the Kubernetes pod to receive GitHub webhooks and trigger the Letta Agent via its REST API.*
+### Appendix A: GitHub Action Workflow
 
-```python
-from flask import Flask, request, jsonify
-import hmac
-import hashlib
-import os
-import requests
-import threading
+```yaml
+name: Letta PR Advisors
 
-app = Flask(__name__)
+on:
+  pull_request:
+    types: [opened, synchronize]
 
-LETTA_API_URL = "http://localhost:8283/v1/agents"
-AGENT_ID = os.environ.get("LETTA_AGENT_ID")
-LETTA_API_KEY = os.environ.get("LETTA_API_KEY")
-WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "").encode()
+jobs:
+  dependency_audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Agent needs full history for git diff
+      - name: Install dependency tools
+        run: |
+          pip3 install requests
+          go install github.com/google/osv-scanner/cmd/osv-scanner@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+      - uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          letta_base_url: ${{ secrets.LETTA_BASE_URL }}
+          agent_id: ${{ vars.LETTA_DEP_AGENT_ID }}
+          model: haiku  # Dependency triage doesn't need opus
+          use_sticky_comment: "true"  # Update same comment, don't spam
+          prompt: |
+            You are the Dependency Auditor. This PR needs dependency analysis.
+            1. Run `python3 scripts/check_deps.py .` and capture the JSON output.
+            2. Run `osv-scanner --lockfile package-lock.json --format json` (or appropriate lockfile).
+            3. Format the findings as a markdown table: Package | Current | Latest | Security Risk | Breaking Changes.
+            4. Post a single advisory comment. Do not modify code. Do not approve the PR.
+            5. Update your memory blocks with what you flagged.
 
-@app.route("/github", methods=["POST"])
-def github_webhook():
-    # Verify GitHub Webhook Signature
-    signature = request.headers.get("X-Hub-Signature-256")
-    if not signature:
-        return "Missing signature", 401
-
-    sha_name, signature = signature.split("=")
-    mac = hmac.new(WEBHOOK_SECRET, request.data, hashlib.sha256)
-    if not hmac.compare_digest(mac.hexdigest(), signature):
-        return "Invalid signature", 401
-
-    payload = request.json
-    action = payload.get("action")
-
-    # Trigger the agent when a PR is opened or synchronized (updated)
-    if "pull_request" in payload and action in ["opened", "synchronize"]:
-        pr = payload["pull_request"]
-        repo = payload["repository"]
-
-        # Build prompt payload for the agent with full context
-        agent_payload = {
-            "message": (
-                f"Review PR #{pr['number']} in {repo['full_name']}. "
-                f"Branch: {pr['head']['ref']}. "
-                f"Base: {pr['base']['ref']}. "
-                f"Clone URL: {pr['head']['repo']['clone_url']}. "
-                f"PR URL: {pr['html_url']}. "
-                f"Title: {pr['title']}. "
-                f"Body: {pr.get('body', '')}. "
-                f"Clone the repo, compute the diff between base and PR branch, "
-                f"run dependency analysis, generate 5 architectural alternatives, "
-                f"and post an advisory comment. Do not modify code."
-            )
-        }
-
-        # Trigger the agent turn via Letta API
-        # Note: This is synchronous. For concurrency, use a queue or spawn
-        # ephemeral worker agents.
-        headers = {"Authorization": f"Bearer {LETTA_API_KEY}"}
-        try:
-            r = requests.post(
-                f"{LETTA_API_URL}/{AGENT_ID}/messages",
-                json=agent_payload,
-                headers=headers,
-                timeout=300  # 5-minute timeout for the agent response
-            )
-            return jsonify({"status": "triggered", "agent_response": r.status_code})
-        except requests.exceptions.Timeout:
-            return jsonify({"status": "timeout", "message": "Agent processing exceeded 5 minutes"}), 504
-
-    return "Event ignored", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+  architecture_advisory:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          letta_base_url: ${{ secrets.LETTA_BASE_URL }}
+          agent_id: ${{ vars.LETTA_ARCH_AGENT_ID }}
+          model: auto  # Architecture reasoning may need stronger model
+          use_sticky_comment: "true"
+          prompt: |
+            You are the Architectural Advisor. This PR needs architecture analysis.
+            1. Run `git diff origin/main...HEAD` to see what the PR changes.
+            2. Read the broader codebase context — not just the changed files.
+            3. Use Exa MCP to search for relevant architectural patterns and docs.
+            4. Use Firecrawl MCP to scrape specific documentation pages if needed.
+            5. Identify up to 5 places where alternative architecture could be used. Provide fewer when the PR does not justify 5 useful findings.
+                Each must reference actual files and code. Pros/cons must be specific.
+            6. Post a single advisory comment. Do not modify code. Do not approve the PR.
+            7. Update your memory blocks with what you suggested.
 ```
 
-### Appendix B: `check_deps.py` (Custom Dependency Tool)
+> **Note on `prompt`:** This input IS supported by the action (confirmed in `action.yml`). It is designed for automated workflows — the agent auto-triggers on `pull_request` events without needing `@letta-code` mentions. This is proven by `letta-ai/letta-code`'s own `review.yml` which uses `prompt:` to auto-review every PR.
+
+### Appendix B: `check_deps.py` (Deterministic Dependency Scanner)
+
+> **WHY NOT LLM?** This script exists because LLMs have training cutoff dates, hallucinate package versions, and make semver comparison errors. The script queries live registries deterministically. The LLM's job is to take the structured JSON output and format it into a human-readable comment — not to guess version numbers.
+
 ```python
 #!/usr/bin/env python3
-"""Scan repo for dependencies, check latest versions across ecosystems."""
+"""
+check_deps.py: Scans a repository for dependencies, queries official
+registries for the latest versions, and returns structured JSON.
+"""
 import json
 import sys
 import requests
 from pathlib import Path
+import re
 
-def check_npm(repo_path):
-    pkg_json = Path(repo_path) / "package.json"
-    if not pkg_json.exists(): return []
-    deps = json.load(open(pkg_json)).get("dependencies", {})
-    results = []
-    for name, current_ver in deps.items():
+# WHY NOT LLM? LLMs have a training cutoff date. If an LLM was trained
+# in 2024, it physically cannot know about a security patch released yesterday.
+# By using a Python script, we get real-time, deterministic data regardless
+# of when the LLM was trained.
+
+def check_npm(repo_path: str):
+    """
+    Reads package.json, queries the npm registry API for the absolute latest version.
+    """
+    dependencies = []
+    pkg_json_path = Path(repo_path) / "package.json"
+
+    # WHY NOT LLM? LLMs cannot reliably read and parse raw JSON files from the
+    # filesystem without complex tool wrappers. They also tend to "remember"
+    # package.json contents from their training data instead of reading the actual file.
+    if not pkg_json_path.exists():
+        return []
+
+    try:
+        with open(pkg_json_path, "r") as f:
+            data = json.load(f)
+            deps = data.get("dependencies", {})
+    except Exception as e:
+        return [{"error": f"Failed to parse package.json: {str(e)}"}]
+
+    # WHY NOT LLM? An LLM might try to guess the latest version of "express" based on
+    # its training data. It might output "4.18.0" when the actual latest is "4.19.2".
+    # This loop forces a hard HTTP GET to the official npm registry.
+    for name, current_version_spec in deps.items():
         try:
             r = requests.get(f"https://registry.npmjs.org/{name}/latest", timeout=5)
-            latest_ver = r.json().get("version")
-            if latest_ver and latest_ver != current_ver:
-                results.append({
-                    "ecosystem": "npm", "name": name,
-                    "current": current_ver, "latest": latest_ver,
+            r.raise_for_status()
+            latest_version = r.json().get("version")
+
+            # WHY NOT LLM? LLMs are bad at comparing semantic versions (semver).
+            # They might think "4.10.0" is newer than "4.9.0" because 9 > 10.
+            # Python string comparison and exact matching removes all math errors.
+            if latest_version and latest_version not in current_version_spec:
+                dependencies.append({
+                    "ecosystem": "npm",
+                    "name": name,
+                    "current": current_version_spec,
+                    "latest": latest_version,
                     "update_available": True
                 })
-        except Exception:
-            continue
-    return results
+        except requests.RequestException as e:
+            # WHY NOT LLM? If the network is down, an LLM will often hallucinate a
+            # version rather than admitting it failed to fetch it. This script fails
+            # gracefully and reports the error to the LLM.
+            dependencies.append({
+                "ecosystem": "npm",
+                "name": name,
+                "error": f"Failed to fetch latest version: {str(e)}"
+            })
 
-def check_pypi(repo_path):
-    """Check Python dependencies from requirements.txt or pyproject.toml."""
-    results = []
-    req_file = Path(repo_path) / "requirements.txt"
-    if not req_file.exists(): return results
-    for line in req_file.read_text().splitlines():
+    return dependencies
+
+def check_pypi(repo_path: str):
+    """
+    Reads requirements.txt, queries the PyPI JSON API for the exact latest version.
+    """
+    dependencies = []
+    req_path = Path(repo_path) / "requirements.txt"
+
+    if not req_path.exists():
+        return []
+
+    try:
+        with open(req_path, "r") as f:
+            lines = f.readlines()
+    except Exception as e:
+        return [{"error": f"Failed to read requirements.txt: {str(e)}"}]
+
+    # WHY NOT LLM? LLMs struggle to parse requirements.txt files because the syntax
+    # is messy (e.g., `Django==4.2.0`, `requests>=2.31.0`, `# this is a comment`).
+    # Python's `split("==")` is deterministic and won't be confused by comments.
+    for line in lines:
         line = line.strip()
-        if not line or line.startswith("#") or line.startswith("-"):
+        if not line or line.startswith("#"):
             continue
-        # Parse "package==1.0.0" or "package>=1.0.0"
-        parts = line.split("==") if "==" in line else line.split(">=")
-        if len(parts) == 2:
-            name, current_ver = parts[0].strip(), parts[1].strip()
+
+        if "==" in line:
+            parts = line.split("==")
+            name = parts[0].strip()
+            current_version = parts[1].strip()
+
             try:
                 r = requests.get(f"https://pypi.org/pypi/{name}/json", timeout=5)
-                latest_ver = r.json().get("info", {}).get("version")
-                if latest_ver and latest_ver != current_ver:
-                    results.append({
-                        "ecosystem": "pypi", "name": name,
-                        "current": current_ver, "latest": latest_ver,
+                r.raise_for_status()
+                latest_version = r.json().get("info", {}).get("version")
+
+                if latest_version and latest_version != current_version:
+                    dependencies.append({
+                        "ecosystem": "pypi",
+                        "name": name,
+                        "current": current_version,
+                        "latest": latest_version,
                         "update_available": True
                     })
-            except Exception:
-                continue
-    return results
+            except requests.RequestException as e:
+                dependencies.append({
+                    "ecosystem": "pypi",
+                    "name": name,
+                    "error": f"Failed to fetch latest version: {str(e)}"
+                })
 
-def check_cargo(repo_path):
-    """Check Rust dependencies from Cargo.toml."""
-    cargo_file = Path(repo_path) / "Cargo.toml"
-    if not cargo_file.exists(): return []
-    results = []
-    try:
-        import tomllib
-        data = tomllib.loads(cargo_file.read_text())
-        deps = data.get("dependencies", {})
-        for name, version_spec in deps.items():
-            current_ver = str(version_spec).strip('"').lstrip("^").lstrip("~")
-            try:
-                r = requests.get(f"https://crates.io/api/v1/crates/{name}", timeout=5,
-                                 headers={"User-Agent": "PR-Advisory-Agent"})
-                latest_ver = r.json().get("crate", {}).get("max_stable_version")
-                if latest_ver and latest_ver != current_ver:
-                    results.append({
-                        "ecosystem": "cargo", "name": name,
-                        "current": current_ver, "latest": latest_ver,
-                        "update_available": True
-                    })
-            except Exception:
-                continue
-    except ImportError:
-        pass  # tomllib requires Python 3.11+
-    return results
-
-def check_go(repo_path):
-    """Check Go dependencies from go.mod."""
-    go_mod = Path(repo_path) / "go.mod"
-    if not go_mod.exists(): return []
-    results = []
-    for line in go_mod.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("require ") and "// indirect" not in line:
-            parts = line.replace("require ", "").split()
-            if len(parts) >= 2:
-                name, current_ver = parts[0], parts[1]
-                try:
-                    r = requests.get(f"https://proxy.golang.org/{name}/@latest", timeout=5)
-                    latest_ver = r.json().get("Version")
-                    if latest_ver and latest_ver != current_ver:
-                        results.append({
-                            "ecosystem": "go", "name": name,
-                            "current": current_ver, "latest": latest_ver,
-                            "update_available": True
-                        })
-                except Exception:
-                    continue
-    return results
+    return dependencies
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "Usage: python3 check_deps.py <repo_path>"}))
+        sys.exit(1)
+
     repo = sys.argv[1]
-    all_deps = check_npm(repo) + check_pypi(repo) + check_cargo(repo) + check_go(repo)
+    all_deps = {
+        "npm": check_npm(repo),
+        "pypi": check_pypi(repo)
+    }
+
+    # WHY NOT LLM? The LLM needs this data in a pristine, structured format.
+    # If we returned raw text, the LLM might miss a package or hallucinate
+    # a field. By printing strict JSON, the Letta agent can parse this directly
+    # into its context window without any loss of fidelity.
     print(json.dumps(all_deps, indent=2))
 ```
 
+> **Extending to other ecosystems:** Additional ecosystems (cargo, go, ruby, .NET) follow the same pattern: read the manifest file deterministically, query the official registry API, return structured JSON. The `WHY NOT LLM` rationale applies identically.
+
 ### Appendix C: Agent Configuration Reference
 
-> **Note:** The following commands reference Letta CLI/API operations. Verify exact syntax against current Letta docs (https://docs.letta.com) before executing. Some commands may differ between CLI versions.
+> **Note:** Verify exact commands against current Letta docs (https://docs.letta.com). Some commands may differ between versions.
 
 ```bash
-# 1. MemFS is enabled via environment variable, NOT a CLI command:
+# MemFS is enabled via environment variable, NOT a CLI command:
 #    Set LETTA_MEMFS_SERVICE_URL=local in the K8s deployment env
 
-# 2. Sleep-time / dream agent configuration:
+# Sleep-time / dream agent configuration:
 #    Verify the correct command in current Letta docs.
 #    The concept is real (background reflection agents), but the exact
 #    CLI command may be /sleeptime, /reflect, or configured via API.
 
-# 3. Skills are created as files in the .skills/ directory, NOT via /skill create:
+# Skills are created as files in the .skills/ directory, NOT via /skill create:
 #    .skills/dependency-audit/SKILL.md
 #    .skills/architecture-advisory/SKILL.md
 #    Letta Code auto-discovers skills from .skills/
+
+# MCP servers (Exa, Firecrawl) are connected via the Letta API or server config:
+#    Do NOT write custom Python wrappers for these services.
+#    Configure them as remote-hosted MCP servers on the Letta server.
 ```
 
 ### Appendix D: K8s Infrastructure Manifests
@@ -549,14 +571,14 @@ spec:
     spec:
       containers:
       - name: letta-server
-        image: your-registry/letta-pr-advisor:latest  # Built FROM letta/letta:latest
+        image: letta/letta:latest  # Deprecated but functional. Pin to specific tag in production.
         ports:
         - containerPort: 8283
         env:
         - name: LETTA_PG_URI
-          value: "postgresql://letta:$(POSTGRES_PASSWORD)@letta-db:5432/letta"
+          value: "postgresql://letta:letta-password@letta-db:5432/letta"
         - name: LETTA_MEMFS_SERVICE_URL
-          value: "local"  # Required to enable MemFS
+          value: "local"  # REQUIRED to enable MemFS
         - name: SECURE
           value: "true"  # Enable password protection
         - name: LETTA_SERVER_PASSWORD
@@ -569,62 +591,13 @@ spec:
             secretKeyRef:
               name: letta-secrets
               key: openai-key
-        - name: GITHUB_TOKEN  # For posting PR comments
-          valueFrom:
-            secretKeyRef:
-              name: letta-secrets
-              key: github-token
-        - name: LETTA_AGENT_ID
-          valueFrom:
-            secretKeyRef:
-              name: letta-agent-config
-              key: agent-id
-        - name: EXA_API_KEY  # Optional: for augmented web search
-          valueFrom:
-            secretKeyRef:
-              name: web-search-secrets
-              key: exa-key
-        - name: TAVILY_API_KEY  # Optional
-          valueFrom:
-            secretKeyRef:
-              name: web-search-secrets
-              key: tavily-key
         volumeMounts:
         - name: memfs-storage
           mountPath: /root/.letta
-      - name: webhook-handler  # Sidecar
-        image: python:3.11-slim
-        ports:
-        - containerPort: 5000
-        env:
-        - name: LETTA_API_URL
-          value: "http://localhost:8283/v1/agents"
-        - name: LETTA_AGENT_ID
-          valueFrom:
-            secretKeyRef:
-              name: letta-agent-config
-              key: agent-id
-        - name: LETTA_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: letta-secrets
-              key: api-key
-        - name: GITHUB_WEBHOOK_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: letta-secrets
-              key: webhook-secret
-        command: ["python3", "/app/webhook-handler.py"]
-        volumeMounts:
-        - name: webhook-code
-          mountPath: /app
       volumes:
       - name: memfs-storage
         persistentVolumeClaim:
           claimName: letta-memfs-pvc
-      - name: webhook-code
-        configMap:
-          name: webhook-handler
 ```
 
 #### `letta-service.yaml`
@@ -638,14 +611,9 @@ spec:
   selector:
     app: letta-pr-advisor
   ports:
-    - name: api
-      protocol: TCP
+    - protocol: TCP
       port: 8283
       targetPort: 8283
-    - name: webhook
-      protocol: TCP
-      port: 5000
-      targetPort: 5000
   type: ClusterIP
 ```
 
@@ -654,25 +622,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: letta-webhook-ingress
+  name: letta-api-ingress
   namespace: ai-agents
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   tls:
   - hosts:
-    - letta-webhooks.yourdomain.com
+    - letta.yourdomain.com
     secretName: letta-tls
   rules:
-  - host: letta-webhooks.yourdomain.com
+  - host: letta.yourdomain.com
     http:
       paths:
-      - path: /github
+      - path: /
         pathType: Prefix
         backend:
           service:
             name: letta-server
             port:
-              number: 5000
+              number: 8283
 ```
 ```

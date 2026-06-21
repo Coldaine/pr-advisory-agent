@@ -44,7 +44,7 @@ flowchart TD
     subgraph K8s [Your Kubernetes Cluster]
     G[Helm Chart: Letta + Postgres]
     G --> H[Loads Agent State & MemFS]
-    G --> I[LLM Reasoning<br/>Generates 5 Alternatives]
+    G --> I[LLM Reasoning<br/>Generates Up to 5 Alternatives]
     end
 
     G -->|Returns Tool Commands| F
@@ -52,7 +52,7 @@ flowchart TD
     F --> J[Runner Executes Tools Locally]
     J --> K[Runs check_deps.py]
     J --> L[Runs osv-scanner]
-    J --> M[Runs augmented_web_search.py]
+    J --> M[Calls MCP-backed changelog context]
 
     K --> N[CLI Sends Results back to Server]
     L --> N

@@ -7,6 +7,20 @@
 
 ---
 
+## Reconciliation Status After Plan 2 Addendum
+
+`Plan2_Cluster_Baseline_Addendum.md` is now the governing baseline for Plan 2. Read the findings below as the original critique of the older Plan 2 draft, with this status:
+
+| Original finding | Current status |
+|:---|:---|
+| Wrong Docker image, missing PostgreSQL/pgvector, missing MemFS env var, missing server auth, missing ingress/namespace material | Addressed in the current Part 1/Part 2 revision or captured as cluster facts to verify before final manifests |
+| `contents: write` violates advisory-only | Addressed by the GitHub Actions workflow shape using `contents: read` and `pull-requests: write` |
+| Missing `synchronize` trigger | Addressed by the GitHub Actions workflow trigger |
+| Custom tools packaged in the Kubernetes image | Superseded by the addendum: tools belong on the GitHub runner or in the repo workspace |
+| Webhook receiver / pod-local repository clone architecture | Superseded by the addendum: no custom webhook receiver in the baseline |
+| Npm-only dependency coverage, shallow checkout, unverified commands, external API overhead | Still important implementation risks to verify before deployment |
+| "Exactly 5" architecture advice quota | Corrected to "up to 5" viable alternatives |
+
 ## Critiques with Severity Grades
 
 ### CRITICAL — Would prevent the system from working

@@ -2,6 +2,8 @@
 
 This document contains criticisms and actionable suggestions for **Plan 2** (`approaches/zai/Part1.txt` & `approaches/zai/Part2.txt`).
 
+> **Reconciliation status:** This evaluation originally assumed a direct GitHub webhook receiver inside Kubernetes. `Plan2_Cluster_Baseline_Addendum.md` supersedes that architecture. The active Plan 2 baseline uses GitHub Actions as the trigger/execution surface and Kubernetes as the self-hosted Letta brain/state surface.
+
 ---
 
 ## 1. Technical Defects & Criticisms
@@ -33,75 +35,23 @@ This document contains criticisms and actionable suggestions for **Plan 2** (`ap
 
 ## 2. Actionable Suggestions for Plan 2 (Self-Hosted on Existing Cluster)
 
-Since you already have a Kubernetes cluster running, implementing Plan 2 is simplified as you can reuse your existing database, Ingress controller, and secret management tools. Below is the recommended implementation route:
+Since you already have a Kubernetes cluster running, implementing Plan 2 should reuse existing cluster primitives without building a custom CI receiver.
 
-### A. Deploy a Combined Letta + Webhook Pod
-Deploy both the Letta Server and your webhook receiver sidecar in a single K8s Pod. They can share a transient local directory (`/tmp/workspace`) using an `emptyDir` volume, resolving the context gap:
+### A. Use the GitHub Actions + Self-Hosted Letta Split
 
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: letta-pr-advisor
-  namespace: ai-agents
-  labels:
-    app: letta-pr-advisor
-spec:
-  containers:
-    # Webhook Receiver Sidecar (Triggered by GitHub, starts agent asynchronously)
-    - name: webhook-handler
-      image: your-registry/letta-webhook-handler:latest
-      ports:
-        - containerPort: 5000
-      env:
-        - name: GITHUB_WEBHOOK_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: pr-advisor-secrets
-              key: github-webhook-secret
-        - name: LETTA_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: pr-advisor-secrets
-              key: letta-api-key
-      volumeMounts:
-        - name: shared-workspace
-          mountPath: /tmp/workspace
+The active implementation route is:
 
-    # Letta Agent Server (Using active image and connecting to existing pgvector DB)
-    - name: letta-server
-      image: letta/letta:latest
-      ports:
-        - containerPort: 8283
-      env:
-        - name: DATABASE_URL
-          value: "postgresql://user:password@postgres-service:5432/letta_db"
-        - name: ANTHROPIC_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: pr-advisor-secrets
-              key: anthropic-key
-        - name: GITHUB_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: pr-advisor-secrets
-              key: github-token
-      volumeMounts:
-        - name: shared-workspace
-          mountPath: /tmp/workspace
-        - name: memfs-data
-          mountPath: /root/.letta
+1. GitHub Actions triggers on `pull_request: [opened, synchronize]`.
+2. `actions/checkout@v4` checks out the repository on the runner with enough history for diff analysis.
+3. Runner-side steps install or expose deterministic tools such as `check_deps.py` and `osv-scanner`.
+4. `letta-ai/letta-code-action@v0` connects to the self-hosted Letta server through `letta_base_url`.
+5. Kubernetes hosts Letta Server, PostgreSQL/pgvector if required, MemFS/state, ingress/TLS, and cluster-side secrets.
 
-  volumes:
-    - name: shared-workspace
-      emptyDir: {}
-    - name: memfs-data
-      persistentVolumeClaim:
-        claimName: letta-memfs-pvc
-```
+Do not deploy a webhook receiver sidecar, queue, pod-local clone service, or tool-heavy custom Letta image in the first version.
 
-### B. Fix Logic and Webhook Timeout Issues
-1. **Asynchronous Webhook Handling**: Modify `webhook-handler.py` to launch the agent turn in a background thread or queue, and immediately return a `202 Accepted` response to GitHub to prevent the 10-second webhook timeout.
-2. **SemVer Range Resolution**: Update `check_deps.py` to use a python library (like `semver` or `packaging`) to correctly match version ranges (e.g. `^4.18.2`) rather than using basic string inequality.
-3. **Parse Lockfiles**: Update `check_deps.py` to read `package-lock.json` or `yarn.lock` to satisfy Requirement 4 ("you are using version X").
+### B. Keep the Real Code/Tool Fixes
 
+1. **SemVer Range Resolution**: Update `check_deps.py` to use a Python library or ecosystem-native parser to correctly match ranges such as `^4.18.2` rather than using basic string inequality.
+2. **Parse Lockfiles**: Update `check_deps.py` to read `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, or the relevant ecosystem lockfile to satisfy Requirement 4 ("you are using version X").
+3. **Avoid Serial Registry Bottlenecks**: Batch or parallelize registry lookups where practical, and cache repeated package metadata during a single run.
+4. **Quota Quality**: Architecture advice should produce up to 5 useful alternatives, not exactly 5 regardless of PR size.

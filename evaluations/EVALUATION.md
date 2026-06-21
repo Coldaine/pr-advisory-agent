@@ -7,7 +7,17 @@ Supersedes `PLAN_EVALUATION.md`. That document contained several factual errors 
 ## What's Being Evaluated
 
 - **Plan 1** (`Plan1.txt`) — Standard/Cloud: GitHub Action + Letta Cloud, `check-deps.sh`, two skills, memory blocks + MemFS
-- **Plan 2** (`ZAIPlan/Part1.txt` + `Part2.txt`) — Self-Hosted K8s: Letta server on Kubernetes with PVC, custom Docker image with tools, augmented web search
+- **Plan 2** (`approaches/zai/Part1.txt` + `Part2.txt` + `Plan2_Cluster_Baseline_Addendum.md`) — Self-Hosted K8s: GitHub Actions runner as the execution surface, self-hosted Letta on Kubernetes as the state/memory/LLM service, existing ingress/TLS/secrets patterns, and no custom webhook receiver in the baseline
+
+## Reconciliation Status
+
+The plan files have been corrected against the evaluations in the following ways:
+
+- **Plan 1:** Wrong action name, broken curl installer, non-dot `skills/` paths, missing `model: auto`, missing sticky comments, `agent_id` secret usage, and the hard "exactly 5" architecture quota have been corrected in `approaches/plan1/Plan1.txt`.
+- **Plan 1 still needs validation:** Current Letta CLI/API agent creation commands and any sleep-time/self-evaluation command names should be verified against current docs before implementation.
+- **Plan 2:** The cluster baseline addendum is now the governing architecture. GitHub Actions hosts the repository checkout and runner-side tools; Kubernetes hosts Letta, memory/state, backing services, ingress/TLS, and cluster-side secrets.
+- **Plan 2 superseded material:** Any direct webhook receiver, webhook sidecar, pod-local repository cloning, custom tool image, or runner-less workflow is exploratory history unless a later decision document explicitly revives it.
+- **Both plans:** Architecture advisory language now says "up to 5" viable alternatives so small PRs do not force filler recommendations.
 
 ---
 
@@ -93,7 +103,7 @@ Plan 2's approach of pointing the action to a self-hosted server via `letta_base
 
 7. **Security model** — Read-only `advisory-config` block, scoped `GITHUB_TOKEN`, prompt injection mitigation via token scope, MemFS git-tracked for auditability. This is well-reasoned.
 
-### What Plan 1 Gets Wrong
+### Original Plan 1 Findings
 
 1. **CLI installation command** — `curl -fsSL https://letta.com/install.sh | bash` is wrong. The official installation is `npm install -g @letta-ai/letta-code` (requires Node.js 18+).
    - Source: https://docs.letta.com/letta-code/cli/
@@ -119,9 +129,9 @@ Plan 2's approach of pointing the action to a self-hosted server via `letta_base
 
 10. **"36.8% performance improvement" claim** — The skill learning performance figure is cited from Letta research but without a verifiable source. It may be real, but the plan presents it as established fact without citation to a specific paper or benchmark.
 
-### Plan 1 Verdict
+### Plan 1 Verdict After Reconciliation
 
-The architecture is sound and close to a working design. The GitHub Action integration pattern is correct in concept (proven by Letta's own real-world usage). The main errors are mechanical: wrong install command, wrong action name, redundant install step, missing action configuration inputs, and skills directory path. All fixable without changing the design.
+The architecture is sound and close to a working design. The GitHub Action integration pattern is correct in concept (proven by Letta's own real-world usage). The main errors were mechanical: wrong install command, wrong action name, redundant install step, missing action configuration inputs, and skills directory path. These have been applied to `approaches/plan1/Plan1.txt`; remaining work is validation against current Letta CLI/API command names.
 
 ---
 
@@ -137,7 +147,7 @@ The architecture is sound and close to a working design. The GitHub Action integ
 
 4. **Augmented web search concept** — Combining Exa (semantic), Tavily (general), and Firecrawl (scrape) for changelog research is a reasonable tool design, though it adds significant complexity.
 
-### What Plan 2 Gets Wrong
+### Original Plan 2 Findings
 
 1. **Wrong Docker image name** — `letta/letta-server:latest` does not exist. The real image is `letta/letta:latest`.
    - Source: https://hub.docker.com/r/letta/letta
@@ -185,9 +195,9 @@ The architecture is sound and close to a working design. The GitHub Action integ
 
 15. **`/memfs enable`, `/sleeptime enable`, `/skill create` commands unverified** — These commands are presented as CLI commands but may not exist in this form. The CLI uses slash commands like `/init`, `/new`, `/model` — not `/memfs enable`.
 
-### Plan 2 Verdict
+### Plan 2 Verdict After Reconciliation
 
-The self-hosting concept is architecturally valid (`letta_base_url` is real), but the execution is deeply flawed: wrong Docker image, missing database dependency, deprecated infrastructure, security violations (`contents: write`), tools on the wrong machine, missing trigger events, and incomplete manifests. The plan would require substantial rework before it could be deployed.
+The self-hosting concept is architecturally valid (`letta_base_url` is real). The original execution was deeply flawed: wrong Docker image, missing database dependency, deprecated infrastructure, security violations (`contents: write`), tools on the wrong machine, missing trigger events, and incomplete manifests. The current Plan 2 documents address or supersede those issues by using the GitHub Actions runner for repository execution and the Kubernetes cluster for Letta state/memory/backing services. Remaining work is live cluster discovery and current Letta deployment validation.
 
 ---
 
@@ -206,14 +216,15 @@ Beyond high-level architectural gaps, the actual code scripts and prompts provid
 * **Sequential Requests Bottleneck**:
   The script performs a synchronous `requests.get` call inside a `for` loop for every single dependency. A standard repository with 100+ dependencies will block the script for minutes, potentially hitting registry rate limits and timing out the entire run.
 
-### 2. `webhook-handler.py` Blocking & Timeout Defect (Plan 2 / Plan 3)
+### 2. `webhook-handler.py` Blocking & Timeout Defect (Superseded Plan 2 Alternative / Plan 3)
 * **Webhook Timeout**:
   ```python
   r = requests.post(f"{LETTA_API_URL}/{AGENT_ID}/messages", json=agent_payload, headers=headers)
   return jsonify({"status": "triggered"})
   ```
   This is a blocking HTTP request. Because the Letta Agent's review turn takes 1–3 minutes (cloning, dependency checking, web searches, and LLM generation), this webhook call will hang. GitHub has a strict **10-second webhook timeout**. This blocking call will cause GitHub to log all webhook deliveries as failed and trigger repeated retries, leading to execution loops.
-  * **Fix**: The handler must trigger the agent *asynchronously* (e.g., using a background thread, queue, or an async run endpoint) and return a `202 Accepted` response to GitHub immediately.
+  * **Current baseline impact**: Not applicable to the active Plan 2 baseline because `Plan2_Cluster_Baseline_Addendum.md` uses GitHub Actions instead of a custom webhook receiver.
+  * **Fix if revived later**: The handler must trigger the agent *asynchronously* (e.g., using a background thread, queue, or an async run endpoint) and return a `202 Accepted` response to GitHub immediately.
 
 ### 3. `check-deps.sh` Silent Failure Defect (Plan 1)
 * **Swallowed Diagnostics**:
@@ -230,36 +241,34 @@ Beyond high-level architectural gaps, the actual code scripts and prompts provid
 
 ---
 
-## Correcting the GitHub Runner Anti-Pattern in Plan 2 (Self-Hosted K8s)
+## Correcting Plan 2 Around the Actual Cluster Baseline
 
-### The Hybrid Anti-Pattern in Plan 2's Original Form
-In its original form, Plan 2 proposed using a **GitHub Actions runner** in combination with the self-hosted Letta Server. This creates a convoluted hybrid loop:
-1. GitHub triggers the Actions runner.
-2. The runner checks out code, installs the Letta CLI, and calls the remote K8s Server.
-3. The K8s Server processes the prompt, but executes terminal/file tools *back* on the GitHub Actions runner where the CLI is running.
-4. This requires you to install and maintain all dependency audit tools (`pip-audit`, `cargo-outdated`, etc.) on the runner machine anyway.
+The earlier evaluation framed the GitHub Actions + self-hosted Letta split as a hybrid anti-pattern and recommended a runner-less webhook design. The cluster baseline addendum supersedes that recommendation.
 
-### The Corrected Plan 2: Native Self-Hosted Webhooks
-To resolve this anti-pattern and eliminate the GitHub Actions runner entirely, Plan 2 must be implemented as a fully native, event-driven architecture inside Kubernetes:
-* **Trigger**: A direct GitHub Webhook sends `pull_request` payloads (e.g. `opened`, `synchronize`) directly to your Kubernetes cluster Ingress.
-* **Cloning**: A webhook handler sidecar triggers the Letta Agent. The agent's first step is to run a local `git_clone` tool to clone the target PR branch into `/tmp/workspace` inside the Kubernetes pod container.
-* **Analysis**: The audit and architecture skills run directly against the cloned repo in the pod container (where tools like `osv-scanner` are pre-baked in the Docker image).
-* **Delivery**: The agent posts the comment directly to the PR via the GitHub API, deletes `/tmp/workspace`, and updates its MemFS memory.
+The corrected Plan 2 intentionally keeps GitHub Actions in the design:
+
+1. GitHub triggers the workflow on `pull_request` `opened` and `synchronize`.
+2. The runner checks out the repository, provides PR context, and executes shell/file tools against the workspace.
+3. The workflow installs or exposes dependency scanners and repo-local scripts on the runner.
+4. The Letta Code action connects to the self-hosted Letta server through `letta_base_url`.
+5. The Kubernetes cluster hosts the Letta server, memory/state, model/provider connectivity, ingress/TLS, PostgreSQL/pgvector if required, and cluster-side secrets.
+
+This avoids building a custom mini-CI system in Kubernetes. The direct webhook receiver, pod-local clone tool, queue/worker design, and custom tool image remain a possible future architecture, but they are not the baseline plan.
 
 ---
 
 ## Comparative Analysis (Plan 1 vs. Plan 2 Corrected)
 
-| Dimension | Plan 1: Standard/Cloud | Plan 2: Self-Hosted K8s (Corrected) |
+| Dimension | Plan 1: Standard/Cloud | Plan 2: Self-Hosted K8s (Corrected Baseline) |
 |:---|:---|:---|
-| **GitHub Action Runner** | Yes (runs Letta CLI & tools) | **No** (bypassed completely via webhooks) |
-| **Trigger Mechanism** | GitHub Action Workflow | Direct GitHub Webhook to Ingress |
-| **Tool Execution Location** | GitHub Action Runner | Kubernetes Pod Container |
-| **Workspace Context** | Local checkout on runner | Cloned dynamically to `/tmp/workspace` |
+| **GitHub Action Runner** | Yes (runs Letta CLI & tools) | Yes (runs Letta CLI & tools) |
+| **Trigger Mechanism** | GitHub Action Workflow | GitHub Action Workflow |
+| **Tool Execution Location** | GitHub Action Runner | GitHub Action Runner |
+| **Workspace Context** | Local checkout on runner | Local checkout on runner |
 | **Advisory-only enforcement** | Correct (`contents: read` only) | Correct (Restricted API/token scopes) |
-| **Ecosystem Tools** | Restored/Installed on runner | Pre-baked in Custom K8s Docker Image |
-| **Infrastructure Overhead** | None (managed cloud) | High (PostgreSQL, PVC, Ingress, webhook handler) |
-| **Data Ownership** | Stored on Letta Cloud | 100% on PVC |
+| **Ecosystem Tools** | Restored/installed on runner | Restored/installed on runner |
+| **Infrastructure Overhead** | None (managed cloud) | Moderate: Letta, backing store if needed, ingress/TLS, Doppler/secrets |
+| **Data Ownership** | Stored on Letta Cloud | Letta state and memory self-hosted; GitHub runner remains the PR execution surface |
 
 ---
 
@@ -267,9 +276,7 @@ To resolve this anti-pattern and eliminate the GitHub Actions runner entirely, P
 
 Based on this evaluation:
 
-1. **If self-hosting is a requirement**: 
-   * **Proceed with Plan 2 (Kubernetes)**, but implement it using the **corrected runner-less webhook pattern** instead of the hybrid runner model. This ensures all tool execution and repository scanning are kept entirely secure inside your Kubernetes container, solving the workspace context gap.
+1. **If self-hosting is a requirement**:
+   * **Proceed with Plan 2 (Kubernetes)** using the cluster-baseline split in `Plan2_Cluster_Baseline_Addendum.md`: GitHub Actions runner hosts repository execution, and Kubernetes hosts the Letta service plus state/memory/backing infrastructure.
 2. **If developer velocity is the primary goal**:
    * **Proceed with Plan 1 (Standard/Cloud)**. Apply the CLI installation and Action version name corrections listed in Part A. This is the fastest path to a working agent, and you can easily migrate the custom skills and prompts to Kubernetes (Plan 2) later.
-
-
