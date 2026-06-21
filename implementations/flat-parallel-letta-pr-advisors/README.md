@@ -1,4 +1,4 @@
-﻿# Flat Parallel Letta PR Advisors
+# Flat Parallel Letta PR Advisors
 
 This implementation package is the corrected ZAI-plan variant: two independent Letta Code agents triggered in parallel by GitHub Actions.
 
