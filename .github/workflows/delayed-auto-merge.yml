@@ -1,0 +1,131 @@
+name: Delayed Auto Merge
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: delayed-auto-merge-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  delayed-auto-merge:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Evaluate delay and obvious blockers
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const blockerLabels = new Set(["blocked", "do-not-merge", "hold"]);
+            const labels = pr.labels.map((label) => label.name.toLowerCase());
+            const labelBlocker = labels.find((label) => blockerLabels.has(label));
+            const reasons = [];
+
+            if (pr.state !== "open") reasons.push(`state=${pr.state}`);
+            if (pr.draft) reasons.push("draft");
+            if (labelBlocker) reasons.push(`label:${labelBlocker}`);
+
+            const anchor = new Date(pr.updated_at || pr.created_at);
+            const dueAtMs = anchor.getTime() + (5 * 60 * 60 * 1000);
+            const remainingSeconds = Math.max(
+              0,
+              Math.ceil((dueAtMs - Date.now()) / 1000)
+            );
+
+            core.setOutput("blocked", reasons.length ? "true" : "false");
+            core.setOutput("reason", reasons.join(", ") || "none");
+            core.setOutput("remaining_seconds", String(remainingSeconds));
+            core.notice(
+              `blocked=${reasons.length ? "true" : "false"} reason=${reasons.join(", ") || "none"} remaining_seconds=${remainingSeconds}`
+            );
+
+      - name: Stop when a clear blocker exists
+        if: steps.gate.outputs.blocked == 'true'
+        run: echo "Skipping delayed auto-merge because ${{ steps.gate.outputs.reason }}"
+
+      - name: Wait until the 5-hour delay expires
+        if: steps.gate.outputs.blocked != 'true' && steps.gate.outputs.remaining_seconds != '0'
+        run: sleep "${{ steps.gate.outputs.remaining_seconds }}"
+
+      - name: Merge when still eligible
+        if: steps.gate.outputs.blocked != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const blockerLabels = new Set(["blocked", "do-not-merge", "hold"]);
+
+            const getPr = async () =>
+              github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pullNumber
+              });
+
+            let response = await getPr();
+            let pr = response.data;
+            const labels = pr.labels.map((label) => label.name.toLowerCase());
+            const labelBlocker = labels.find((label) => blockerLabels.has(label));
+
+            if (pr.state !== "open") {
+              core.notice(`Skipping merge because state=${pr.state}`);
+              return;
+            }
+
+            if (pr.draft) {
+              core.notice("Skipping merge because the PR is draft.");
+              return;
+            }
+
+            if (labelBlocker) {
+              core.notice(`Skipping merge because blocking label ${labelBlocker} is present.`);
+              return;
+            }
+
+            let mergeable = pr.mergeable;
+            let mergeableState = pr.mergeable_state;
+
+            if (mergeable === null) {
+              for (let attempt = 0; attempt < 6; attempt += 1) {
+                await new Promise((resolve) => setTimeout(resolve, 5000));
+                response = await getPr();
+                pr = response.data;
+                mergeable = pr.mergeable;
+                mergeableState = pr.mergeable_state;
+                if (mergeable !== null) break;
+              }
+            }
+
+            const clearBlockers = new Set(["dirty", "blocked", "draft", "unknown"]);
+
+            if (mergeable === false || clearBlockers.has(mergeableState)) {
+              core.notice(
+                `Skipping merge because mergeable=${mergeable} mergeable_state=${mergeableState}`
+              );
+              return;
+            }
+
+            await github.rest.pulls.merge({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              merge_method: "merge"
+            });
+
+            core.notice(`Merged PR #${pullNumber} after the 5-hour delay.`);
