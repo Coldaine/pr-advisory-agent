@@ -31,10 +31,77 @@ This document contains criticisms and actionable suggestions for **Plan 2** (`ap
 
 ---
 
-## 2. Actionable Suggestions for Plan 2
+## 2. Actionable Suggestions for Plan 2 (Self-Hosted on Existing Cluster)
 
-1. **Implement Asynchronous Webhook Handling**: Modify `webhook-handler.py` to trigger the Letta Agent in a background thread or asynchronous task queue, and return a `202 Accepted` response immediately to GitHub to avoid the 10-second timeout.
-2. **Utilize a Proper SemVer Parser**: Use the `semver` or `packaging` Python libraries in `check_deps.py` to properly evaluate semantic range compatibility rather than using simple string inequalities.
-3. **Parse Lockfiles**: Update `check_deps.py` to parse `package-lock.json`, `yarn.lock`, or python lockfiles to resolve the true installed package versions.
-4. **Deploy Database Sidecar**: Add a PostgreSQL with `pgvector` service and deployment to your Kubernetes manifests to act as the Letta database backend.
-5. **Secure the Ingress**: Configure basic authentication or API key verification on your exposed Letta API endpoint to ensure unauthorized users cannot call your agent's shell tools.
+Since you already have a Kubernetes cluster running, implementing Plan 2 is simplified as you can reuse your existing database, Ingress controller, and secret management tools. Below is the recommended implementation route:
+
+### A. Deploy a Combined Letta + Webhook Pod
+Deploy both the Letta Server and your webhook receiver sidecar in a single K8s Pod. They can share a transient local directory (`/tmp/workspace`) using an `emptyDir` volume, resolving the context gap:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: letta-pr-advisor
+  namespace: ai-agents
+  labels:
+    app: letta-pr-advisor
+spec:
+  containers:
+    # Webhook Receiver Sidecar (Triggered by GitHub, starts agent asynchronously)
+    - name: webhook-handler
+      image: your-registry/letta-webhook-handler:latest
+      ports:
+        - containerPort: 5000
+      env:
+        - name: GITHUB_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: pr-advisor-secrets
+              key: github-webhook-secret
+        - name: LETTA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pr-advisor-secrets
+              key: letta-api-key
+      volumeMounts:
+        - name: shared-workspace
+          mountPath: /tmp/workspace
+
+    # Letta Agent Server (Using active image and connecting to existing pgvector DB)
+    - name: letta-server
+      image: letta/letta:latest
+      ports:
+        - containerPort: 8283
+      env:
+        - name: DATABASE_URL
+          value: "postgresql://user:password@postgres-service:5432/letta_db"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pr-advisor-secrets
+              key: anthropic-key
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: pr-advisor-secrets
+              key: github-token
+      volumeMounts:
+        - name: shared-workspace
+          mountPath: /tmp/workspace
+        - name: memfs-data
+          mountPath: /root/.letta
+
+  volumes:
+    - name: shared-workspace
+      emptyDir: {}
+    - name: memfs-data
+      persistentVolumeClaim:
+        claimName: letta-memfs-pvc
+```
+
+### B. Fix Logic and Webhook Timeout Issues
+1. **Asynchronous Webhook Handling**: Modify `webhook-handler.py` to launch the agent turn in a background thread or queue, and immediately return a `202 Accepted` response to GitHub to prevent the 10-second webhook timeout.
+2. **SemVer Range Resolution**: Update `check_deps.py` to use a python library (like `semver` or `packaging`) to correctly match version ranges (e.g. `^4.18.2`) rather than using basic string inequality.
+3. **Parse Lockfiles**: Update `check_deps.py` to read `package-lock.json` or `yarn.lock` to satisfy Requirement 4 ("you are using version X").
+
