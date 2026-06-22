@@ -1,4 +1,4 @@
-﻿---
+---
 name: dependency-audit
 description: Deterministically audit dependency versions and vulnerabilities for PRs using check_deps.py, direct osv-scanner shell execution, and Exa/Firecrawl MCP for changelog context.
 ---
@@ -17,7 +17,7 @@ Do not guess package versions from model memory. Use deterministic tools for liv
 
 1. Run:
    ```bash
-   python3 scripts/check_deps.py .
+   python3 approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py .
    ```
    Capture and inspect the JSON output.
 

@@ -12,6 +12,7 @@ import json
 import sys
 import requests
 from pathlib import Path
+import urllib.parse
 import re
 from concurrent.futures import ThreadPoolExecutor
 
@@ -59,12 +60,34 @@ def is_newer(current_spec: str, latest_version: str) -> bool:
     
     return latest_parsed > current_parsed
 
+def is_safe_package_name(name: str, ecosystem: str) -> bool:
+    """
+    Validates the package name to prevent arbitrary path traversal or URL manipulation (SSRF).
+    """
+    if not isinstance(name, str):
+        return False
+    if ecosystem == "npm":
+        # Allow scoped npm packages e.g. @types/node, @babel/core
+        # Safe characters: alphanumeric, dashes, dots, underscores, and single slash for scope.
+        return bool(re.match(r'^(?:@[a-zA-Z0-9_.-]+/)?(?:[a-zA-Z0-9_.-]+)$', name))
+    elif ecosystem == "pypi":
+        # PyPI package names. Safe characters: alphanumeric, dashes, dots, underscores.
+        return bool(re.match(r'^[a-zA-Z0-9_.-]+$', name))
+    return False
+
 def fetch_npm_latest(name: str, current_spec: str):
     """
     Fetches the latest version of a package from the npm registry.
     """
+    if not is_safe_package_name(name, "npm"):
+        return {
+            "ecosystem": "npm",
+            "name": name,
+            "error": f"Invalid package name format: {name}"
+        }
     try:
-        r = requests.get(f"https://registry.npmjs.org/{name}/latest", timeout=5)
+        encoded_name = urllib.parse.quote(name, safe='@')
+        r = requests.get(f"https://registry.npmjs.org/{encoded_name}/latest", timeout=5)
         r.raise_for_status()
         latest_version = r.json().get("version")
         
@@ -117,6 +140,12 @@ def fetch_pypi_latest(name: str, current_version: str):
     """
     Fetches the latest version of a package from the PyPI JSON API.
     """
+    if not is_safe_package_name(name, "pypi"):
+        return {
+            "ecosystem": "pypi",
+            "name": name,
+            "error": f"Invalid package name format: {name}"
+        }
     try:
         r = requests.get(f"https://pypi.org/pypi/{name}/json", timeout=5)
         r.raise_for_status()
@@ -157,7 +186,12 @@ def check_pypi(repo_path: str):
     pypi_deps = []
     for line in lines:
         line = line.strip()
-        if not line or line.startswith("#"):
+        if not line:
+            continue
+        # Strip inline comments
+        if "#" in line:
+            line = line.split("#")[0].strip()
+        if not line:
             continue
 
         if "==" in line:

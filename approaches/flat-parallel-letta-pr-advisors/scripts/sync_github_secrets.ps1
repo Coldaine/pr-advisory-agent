@@ -1,4 +1,4 @@
-﻿param(
+param(
   [Parameter(Mandatory=$true)]
   [string]$Repo,
 
@@ -16,10 +16,15 @@ function Set-GitHubSecretFromDoppler {
   )
 
   $value = doppler secrets get $SecretName --project $DopplerProject --config $DopplerConfig --plain
-  if (-not $value) { throw "Doppler secret $SecretName not found in $DopplerProject/$DopplerConfig" }
+  if ($LASTEXITCODE -ne 0 -or -not $value) {
+    throw "Failed to fetch $SecretName from Doppler (exit code: $LASTEXITCODE or empty value)"
+  }
 
   # gh secret set reads from stdin; do not echo the value to terminal.
   $value | gh secret set $SecretName --repo $Repo
+  if ($LASTEXITCODE -ne 0) {
+     throw "Failed to set GitHub secret $SecretName via gh CLI (exit code: $LASTEXITCODE)"
+  }
   Write-Host "Synced GitHub secret: $SecretName"
 }
 

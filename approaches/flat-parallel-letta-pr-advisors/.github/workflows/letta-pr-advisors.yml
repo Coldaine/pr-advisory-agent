@@ -27,7 +27,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install requests
-          go install github.com/google/osv-scanner/cmd/osv-scanner@latest
+          go install github.com/google/osv-scanner/cmd/osv-scanner@v1.8.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run Dependency Auditor
@@ -48,7 +48,7 @@ jobs:
             - Do not guess package versions from model memory.
 
             Required work:
-            1. Run `python3 scripts/check_deps.py .` and capture the JSON output.
+            1. Run `python3 approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py .` and capture the JSON output.
             2. Locate supported lockfiles and run `osv-scanner --lockfile <lockfile> --format json` directly via shell.
             3. Use Exa MCP for changelog and breaking-change context for meaningful outdated dependencies.
             4. Use Firecrawl MCP to scrape specific changelog/docs pages when Exa returns a relevant page that needs deeper reading.
