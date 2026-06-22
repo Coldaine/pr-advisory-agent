@@ -27,6 +27,7 @@ Doppler is the source of truth.
 - `docs/runbooks/doppler.md` — Doppler-first secret handling and bootstrap commands.
 - `docs/qa/QA_CHECKLIST.md` — validation checklist.
 - `docs/qa/SELF_AUDIT.md` — review of plan integrity after rewrite.
+- `tests/` — containing test package manifests (`package.json`, `requirements.txt`) to validate the dependency scanner output.
 
 ## Current implementation status
 
