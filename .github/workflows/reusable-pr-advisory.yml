@@ -23,9 +23,17 @@ on:
         type: string
         required: false
         default: "main"
+      base_branch:
+        description: "The base branch to compare against for PR diff analysis (e.g., main, develop)"
+        type: string
+        required: false
+        default: "main"
     secrets:
       LETTA_API_KEY:
         description: "The API Key for Letta"
+        required: true
+      GITHUB_TOKEN:
+        description: "GitHub token for PR comment posting (pass secrets.GITHUB_TOKEN)"
         required: true
 
 permissions:
@@ -125,6 +133,7 @@ jobs:
           letta_api_key: ${{ secrets.LETTA_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           letta_base_url: ${{ inputs.letta_base_url }}
+          base_branch: ${{ inputs.base_branch }}
           agent_id: ${{ inputs.letta_arch_agent_id }}
           model: auto
           use_sticky_comment: "true"
@@ -137,7 +146,7 @@ jobs:
             - Every finding must reference actual files/code.
 
             Required work:
-            1. Run `git fetch origin ${{ github.base_ref }} --depth=1`, then run `git diff origin/${{ github.base_ref }}...HEAD` to inspect the PR diff.
+            1. Use the built-in PR context provided by the action (PR diff is already available).
             2. Read surrounding code and entry points, not only changed files.
             3. Use Exa MCP for relevant architectural/library context.
             4. Use Firecrawl MCP to scrape specific documentation pages when deeper docs are needed.
