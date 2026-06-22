@@ -14,6 +14,11 @@ This directory holds active candidate approaches for the PR advisory product.
 - shape: more detailed hybrid or self-hosting-oriented approach
 - emphasis: Kubernetes, custom tooling, and deeper implementation detail
 
+### `flat-parallel-letta-pr-advisors`
+- primary directory: `approaches/flat-parallel-letta-pr-advisors`
+- shape: corrected ZAI-plan variant with two parallel Letta Code agents
+- emphasis: dependency audit and architectural advice, Doppler secret management, Kubernetes templates, and deterministic checks
+
 ## Working rule
 
 These approaches are being kept side by side on purpose.

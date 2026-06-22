@@ -1,4 +1,4 @@
-﻿---
+---
 name: architecture-advisory
 description: Review PR architecture using actual diff/code context and Exa/Firecrawl MCP; provide up to 5 viable alternatives with concrete pros/cons.
 ---
@@ -17,7 +17,7 @@ Give specific, code-grounded alternatives. Provide up to 5 viable alternatives, 
 
 1. Inspect the diff:
    ```bash
-   git fetch origin <base-branch> --depth=1 || true
+   git fetch origin <base-branch> --depth=1
    git diff origin/<base-branch>...HEAD
    ```
 

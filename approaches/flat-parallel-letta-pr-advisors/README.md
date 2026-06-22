@@ -1,4 +1,4 @@
-﻿# Flat Parallel Letta PR Advisors
+# Flat Parallel Letta PR Advisors
 
 This implementation package is the corrected ZAI-plan variant: two independent Letta Code agents triggered in parallel by GitHub Actions.
 
@@ -27,6 +27,7 @@ Doppler is the source of truth.
 - `docs/runbooks/doppler.md` — Doppler-first secret handling and bootstrap commands.
 - `docs/qa/QA_CHECKLIST.md` — validation checklist.
 - `docs/qa/SELF_AUDIT.md` — review of plan integrity after rewrite.
+- `tests/` — containing test package manifests (`package.json`, `requirements.txt`) to validate the dependency scanner output.
 
 ## Current implementation status
 
