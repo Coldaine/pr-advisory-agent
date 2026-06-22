@@ -64,7 +64,8 @@ jobs:
         run: |
           mkdir -p approaches/flat-parallel-letta-pr-advisors/scripts
           cp .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py
-          cp -r .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/.skills .skills
+          mkdir -p .skills
+          cp -r .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/.skills/. .skills/
           # Clean up the checked-out folder so it doesn't pollute the target repo context or check_deps.py run
           rm -rf .pr-advisory-agent
 
@@ -115,7 +116,8 @@ jobs:
       # 3. Copy skills to the root workspace so letta-code-action can discover them
       - name: Prepare Skills
         run: |
-          cp -r .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/.skills .skills
+          mkdir -p .skills
+          cp -r .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/.skills/. .skills/
           rm -rf .pr-advisory-agent
 
       # 4. Run the Architectural Advisor agent using Letta Code Action

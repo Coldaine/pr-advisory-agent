@@ -23,6 +23,7 @@ Do not treat any one folder as canonical unless the user explicitly says so.
 - `approaches/` contains active candidate approaches
 - `evaluations/` contains cross-approach comparison material
 - approach-specific evaluation notes may live beside the approach they evaluate
+- `.github/workflows/reusable-pr-advisory.yml` provides a reusable entry point for cross-repository integration.
 
 ## Working rules for agents
 
