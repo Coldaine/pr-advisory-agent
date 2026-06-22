@@ -9,3 +9,4 @@ Start here:
 - `approaches/` for candidate approaches
 - `evaluations/` for cross-approach analysis
 - `docs/` for future finalized documentation
+- `docs/external-integration.md` for integrating these agents into your own repositories
