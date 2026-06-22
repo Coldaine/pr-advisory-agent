@@ -14,6 +14,7 @@ import requests
 from pathlib import Path
 import urllib.parse
 import re
+from packaging.requirements import Requirement
 from concurrent.futures import ThreadPoolExecutor
 
 # WHY NOT LLM? LLMs have a training cutoff date. If an LLM was trained
@@ -194,11 +195,20 @@ def check_pypi(repo_path: str):
         if not line:
             continue
 
-        if "==" in line:
-            parts = line.split("==")
-            name = parts[0].strip()
-            current_version = parts[1].strip()
-            pypi_deps.append((name, current_version))
+        try:
+            req = Requirement(line)
+            name = req.name
+            specs = list(req.specifier)
+            if specs:
+                current_version = specs[0].version
+                pypi_deps.append((name, current_version))
+        except Exception:
+            # Fallback to simple == split
+            if "==" in line:
+                parts = line.split("==")
+                name = parts[0].strip()
+                current_version = parts[1].strip()
+                pypi_deps.append((name, current_version))
 
     # Run queries in parallel using ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=10) as executor:

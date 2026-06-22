@@ -1,4 +1,4 @@
-﻿# QA Checklist
+# QA Checklist
 
 ## Plan integrity
 

@@ -1,4 +1,4 @@
-﻿# Doppler Runbook
+# Doppler Runbook
 
 Doppler is the source of truth for secrets. Do not write real secrets to `.env`, `.env.local`, markdown, manifests, or checked-in files.
 
@@ -36,13 +36,13 @@ The `letta-code-action` needs `letta_api_key` as an action input. The stable fir
 
 1. Keep Doppler as source of truth.
 2. Sync required values into GitHub repository secrets as deployment material:
-   - `LETTA_API_KEY`
-   - `LETTA_BASE_URL`
+   - `LETTA_API_KEY` (synced via `scripts/sync_github_secrets.ps1` from Doppler)
+   - `LETTA_BASE_URL` (must be configured manually in GitHub repository secrets since it is deployment-specific)
 3. Store agent IDs as GitHub variables:
    - `LETTA_DEP_AGENT_ID`
    - `LETTA_ARCH_AGENT_ID`
 
-Use `scripts/sync_github_secrets.ps1` to sync from Doppler to GitHub without printing values.
+Use `scripts/sync_github_secrets.ps1` to sync `LETTA_API_KEY` from Doppler to GitHub without printing values.
 
 ## K8s pattern
 
