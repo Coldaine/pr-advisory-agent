@@ -1,0 +1,145 @@
+# Reusable Letta PR Advisors Workflow
+# Designed to be referenced by other repositories via `uses: Coldaine/pr-advisory-agent/.github/workflows/reusable-pr-advisory.yml@main`
+name: Reusable Letta PR Advisors
+
+on:
+  workflow_call:
+    inputs:
+      letta_dep_agent_id:
+        description: "The Letta Agent ID for the Dependency Auditor agent"
+        type: string
+        required: true
+      letta_arch_agent_id:
+        description: "The Letta Agent ID for the Architectural Advisor agent"
+        type: string
+        required: true
+      letta_base_url:
+        description: "The base URL of the Letta server (optional, defaults to Letta Cloud)"
+        type: string
+        required: false
+        default: "https://api.letta.com"
+      ref:
+        description: "The branch, tag, or SHA of the pr-advisory-agent repository to checkout"
+        type: string
+        required: false
+        default: "main"
+    secrets:
+      LETTA_API_KEY:
+        description: "The API Key for Letta"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dependency_audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout the calling repository (the target to review)
+      - name: Checkout Caller Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Checkout the central pr-advisory-agent repository
+      - name: Checkout PR Advisory Agent Repo
+        uses: actions/checkout@v4
+        with:
+          repository: Coldaine/pr-advisory-agent
+          ref: ${{ inputs.ref }}
+          path: .pr-advisory-agent
+
+      # 3. Setup Python and install required CLI dependency tools
+      - name: Install dependency tools
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install requests packaging
+          go install github.com/google/osv-scanner/cmd/osv-scanner@v1.8.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # 4. Copy the .skills and check_deps.py script to the expected paths
+      - name: Prepare Skills and Scripts
+        run: |
+          mkdir -p approaches/flat-parallel-letta-pr-advisors/scripts
+          cp .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py
+          cp -r .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/.skills .skills
+          # Clean up the checked-out folder so it doesn't pollute the target repo context or check_deps.py run
+          rm -rf .pr-advisory-agent
+
+      # 5. Run the Dependency Auditor agent using Letta Code Action
+      - name: Run Dependency Auditor
+        uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          letta_base_url: ${{ inputs.letta_base_url }}
+          agent_id: ${{ inputs.letta_dep_agent_id }}
+          model: haiku
+          use_sticky_comment: "true"
+          prompt: |
+            You are the Dependency Auditor. This PR needs dependency analysis.
+
+            Hard constraints:
+            - Advisory only. Do not modify code. Do not approve the PR.
+            - Use deterministic tools for live version/vulnerability data.
+            - Do not guess package versions from model memory.
+
+            Required work:
+            1. Run `python3 approaches/flat-parallel-letta-pr-advisors/scripts/check_deps.py .` and capture the JSON output.
+            2. Locate supported lockfiles and run `osv-scanner --lockfile <lockfile> --format json` directly via shell.
+            3. Use Exa MCP for changelog and breaking-change context for meaningful outdated dependencies.
+            4. Use Firecrawl MCP to scrape specific changelog/docs pages when Exa returns a relevant page that needs deeper reading.
+            5. Post one advisory comment with dependency status: Package | Current | Latest | Security Risk | Breaking Changes.
+            6. Update your memory blocks and MemFS review history with what you flagged.
+
+  architecture_advisory:
+    name: Architecture Advisory
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout the calling repository (the target to review)
+      - name: Checkout Caller Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Checkout the central pr-advisory-agent repository
+      - name: Checkout PR Advisory Agent Repo
+        uses: actions/checkout@v4
+        with:
+          repository: Coldaine/pr-advisory-agent
+          ref: ${{ inputs.ref }}
+          path: .pr-advisory-agent
+
+      # 3. Copy skills to the root workspace so letta-code-action can discover them
+      - name: Prepare Skills
+        run: |
+          cp -r .pr-advisory-agent/approaches/flat-parallel-letta-pr-advisors/.skills .skills
+          rm -rf .pr-advisory-agent
+
+      # 4. Run the Architectural Advisor agent using Letta Code Action
+      - name: Run Architectural Advisor
+        uses: letta-ai/letta-code-action@v0
+        with:
+          letta_api_key: ${{ secrets.LETTA_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          letta_base_url: ${{ inputs.letta_base_url }}
+          agent_id: ${{ inputs.letta_arch_agent_id }}
+          model: auto
+          use_sticky_comment: "true"
+          prompt: |
+            You are the Architectural Advisor. This PR needs architecture analysis.
+
+            Hard constraints:
+            - Advisory only. Do not modify code. Do not approve the PR.
+            - Do not pad. Provide up to 5 viable alternatives; fewer is correct when the PR does not justify 5 useful findings.
+            - Every finding must reference actual files/code.
+
+            Required work:
+            1. Run `git fetch origin ${{ github.base_ref }} --depth=1`, then run `git diff origin/${{ github.base_ref }}...HEAD` to inspect the PR diff.
+            2. Read surrounding code and entry points, not only changed files.
+            3. Use Exa MCP for relevant architectural/library context.
+            4. Use Firecrawl MCP to scrape specific documentation pages when deeper docs are needed.
+            5. Post one advisory comment with viable alternatives: current approach, alternative, pros, cons, effort.
+            6. Update your memory blocks and MemFS review history with what you suggested.
