@@ -64,6 +64,8 @@ jobs:
       letta_arch_agent_id: ${{ vars.LETTA_ARCH_AGENT_ID }}
       # Defaults to Letta Cloud. If self-hosting, specify:
       # letta_base_url: 'https://letta.yourdomain.com'
+      # Specify base branch to diff against (optional, defaults to github.base_ref):
+      # base_ref: 'main'
     secrets:
       LETTA_API_KEY: ${{ secrets.LETTA_API_KEY }}
 ```
@@ -86,3 +88,9 @@ Configure the following in the target repository's Settings:
 
 > [!NOTE]
 > It is recommended to create a separate pair of Letta agents for each target repository to isolate their memory blocks and review histories.
+
+> [!IMPORTANT]
+> **Dependency Scanning Ecosystem Limitations:**
+> The `check_deps.py` inventory scanner currently only resolves version freshness and breaking-change logs for the **npm** (`package.json`) and **pip/pypi** (`requirements.txt`) ecosystems. 
+> For other ecosystems (Go, Rust, Ruby, etc.), the audit relies on `osv-scanner` to detect and flag known security CVEs. Freshness and upgrade-path calculations for these other ecosystems are not performed by the current script version.
+

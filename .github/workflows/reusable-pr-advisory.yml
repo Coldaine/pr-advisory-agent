@@ -23,6 +23,11 @@ on:
         type: string
         required: false
         default: "main"
+      base_ref:
+        description: "The base git ref to diff against for architectural advice (defaults to github.base_ref, falling back to repository default branch)"
+        type: string
+        required: false
+        default: ""
     secrets:
       LETTA_API_KEY:
         description: "The API Key for Letta"
@@ -137,7 +142,7 @@ jobs:
             - Every finding must reference actual files/code.
 
             Required work:
-            1. Run `git fetch origin ${{ github.base_ref }} --depth=1`, then run `git diff origin/${{ github.base_ref }}...HEAD` to inspect the PR diff.
+            1. Run `git fetch origin ${{ inputs.base_ref || github.base_ref || github.event.repository.default_branch || 'main' }} --depth=1`, then run `git diff origin/${{ inputs.base_ref || github.base_ref || github.event.repository.default_branch || 'main' }}...HEAD` to inspect the PR diff.
             2. Read surrounding code and entry points, not only changed files.
             3. Use Exa MCP for relevant architectural/library context.
             4. Use Firecrawl MCP to scrape specific documentation pages when deeper docs are needed.
