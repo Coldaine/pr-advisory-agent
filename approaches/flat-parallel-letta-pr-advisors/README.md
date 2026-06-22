@@ -7,20 +7,21 @@ This implementation package is the corrected ZAI-plan variant: two independent L
 
 No orchestrator. No webhook sidecar. No custom Firecrawl wrapper. No OSV wrapper. No git clone tool.
 
-## Secret posture
+## Secret Posture
 
-Doppler is the source of truth.
+Doppler remains the source of truth for configuration and secrets:
 
 - `LETTA_API_KEY` is stored in Doppler: `codingagents/dev`.
 - Exa/Firecrawl keys are stored in Doppler: `search_tools_and_browsers/dev`.
 - Local/bootstrap commands must use `doppler run`.
 - Do not create `.env.local` with real secrets.
-- GitHub Actions secrets should be populated from Doppler (or hydrated by a Doppler service token) rather than hand-entered.
+- GitHub Actions secrets are populated from Doppler via `scripts/sync_github_secrets.ps1`.
 
 ## Files
 
-- `.github/workflows/letta-pr-advisors.yml` — two parallel jobs, one per agent.
-- `scripts/check_deps.py` — deterministic registry checks with WHY NOT LLM rationale.
+- `.github/workflows/reusable-pr-advisory.yml` — The root reusable entry point for external repositories.
+- `scripts/check_deps.py` — deterministic registry checks with packaging/requests libraries.
+- `scripts/sync_github_secrets.ps1` — Doppler-to-GitHub secret syncer script.
 - `.skills/dependency-audit/SKILL.md` — dependency auditor instructions.
 - `.skills/architecture-advisory/SKILL.md` — architecture advisor instructions.
 - `k8s/` — baseline self-hosted Letta server manifests.
@@ -29,11 +30,67 @@ Doppler is the source of truth.
 - `docs/qa/SELF_AUDIT.md` — review of plan integrity after rewrite.
 - `tests/` — containing test package manifests (`package.json`, `requirements.txt`) to validate the dependency scanner output.
 
-## Current implementation status
+---
 
-Ready to start implementation work, but not ready to deploy until:
+## Active Letta Agents
 
-1. A self-hosted Letta server URL exists (`LETTA_BASE_URL`).
-2. Two agents are created and IDs are stored as `LETTA_DEP_AGENT_ID` and `LETTA_ARCH_AGENT_ID`.
-3. Exa and Firecrawl MCP servers are connected to the agents.
-4. GitHub Actions can access `LETTA_API_KEY` and `LETTA_BASE_URL` from Doppler-backed secrets.
+The agents have been successfully created on Letta Cloud (using the `letta/auto` model) and their IDs are mapped to the repository variables:
+
+*   **Dependency Auditor** (ID: `agent-519c1c06-83b2-4900-94f1-ac100891b640`)
+    *   System prompt is configured to enforce deterministic auditing and prevent code modification or direct PR approvals.
+*   **Architectural Advisor** (ID: `agent-49f641aa-4043-4c7d-980a-1a100dea8cf5`)
+    *   System prompt is configured to limit recommendations to a maximum of 5 viable alternatives, grounded in actual files/code.
+
+---
+
+## How to Call from External Repositories
+
+Any external repository can call these agents using GitHub Actions by referencing the central reusable workflow.
+
+### 1. Target Repo Workflow File
+Create `.github/workflows/pr-advisory.yml` in the target repository with the following structure:
+
+```yaml
+name: PR Advisory Reviews
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  pr_advisory:
+    uses: Coldaine/pr-advisory-agent/.github/workflows/reusable-pr-advisory.yml@main
+    with:
+      letta_dep_agent_id: ${{ vars.LETTA_DEP_AGENT_ID }}
+      letta_arch_agent_id: ${{ vars.LETTA_ARCH_AGENT_ID }}
+      # Defaults to Letta Cloud. If self-hosting, specify:
+      # letta_base_url: 'https://letta.yourdomain.com'
+      # Specify base branch to diff against (optional, defaults to github.base_ref):
+      # base_ref: 'main'
+    secrets:
+      LETTA_API_KEY: ${{ secrets.LETTA_API_KEY }}
+```
+
+### 2. Required Permissions (Target Repo)
+Verify the target repository allows the runner to write to pull requests. Ensure `Workflow permissions` under `Settings > Actions > General` is set to **"Read and write permissions"** or explicitly add the permissions block:
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+```
+
+### 3. Required Secrets & Variables (Target Repo)
+Configure the following in the target repository's Settings:
+*   **Repository Secret:**
+    *   `LETTA_API_KEY`: API key to connect to the Letta server (Cloud or self-hosted).
+*   **Repository Variables:**
+    *   `LETTA_DEP_AGENT_ID`: The ID of the Dependency Auditor agent.
+    *   `LETTA_ARCH_AGENT_ID`: The ID of the Architectural Advisor agent.
+
+> [!NOTE]
+> It is recommended to create a separate pair of Letta agents for each target repository to isolate their memory blocks and review histories.
+
+> [!IMPORTANT]
+> **Dependency Scanning Ecosystem Limitations:**
+> The `check_deps.py` inventory scanner currently only resolves version freshness and breaking-change logs for the **npm** (`package.json`) and **pip/pypi** (`requirements.txt`) ecosystems. 
+> For other ecosystems (Go, Rust, Ruby, etc.), the audit relies on `osv-scanner` to detect and flag known security CVEs. Freshness and upgrade-path calculations for these other ecosystems are not performed by the current script version.
+
